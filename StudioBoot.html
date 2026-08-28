@@ -1,0 +1,36 @@
+<script>
+(function () {
+  'use strict';
+  window.__HTML_STUDIO_BOOT_ERRORS = [];
+  window.__HTML_STUDIO_PHASE = 'boot';
+
+  function badgeError(prefix, message) {
+    try {
+      var badge = document.getElementById('buildStatusBadge');
+      if (!badge) return;
+      badge.textContent = 'v8.11.0 · ' + prefix;
+      badge.className = 'build-badge error';
+      badge.title = String(message || 'Unknown startup error');
+    } catch (_) {}
+  }
+
+  window.addEventListener('error', function (event) {
+    var phase = window.__HTML_STUDIO_PHASE || 'unknown';
+    var item = {
+      phase: phase,
+      message: String(event && event.message || 'JavaScript error'),
+      file: String(event && event.filename || ''),
+      line: Number(event && event.lineno || 0),
+      column: Number(event && event.colno || 0)
+    };
+    window.__HTML_STUDIO_BOOT_ERRORS.push(item);
+    if (phase === 'core') badgeError('CORE JS ERROR', item.message + (item.line ? ' · line ' + item.line : ''));
+  }, true);
+
+  window.addEventListener('unhandledrejection', function (event) {
+    var reason = event && event.reason;
+    var message = reason && reason.message ? reason.message : String(reason || 'Unhandled promise rejection');
+    window.__HTML_STUDIO_BOOT_ERRORS.push({ phase: window.__HTML_STUDIO_PHASE || 'unknown', message: message });
+  });
+})();
+</script>

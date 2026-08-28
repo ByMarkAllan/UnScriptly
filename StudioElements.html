@@ -1,0 +1,89 @@
+<script>
+(() => {
+  'use strict';
+
+  const plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  const MATERIAL_SYMBOLS_STYLE = "font-family:'Material Symbols Outlined';font-weight:normal;font-style:normal;font-size:40px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;font-feature-settings:'liga';-webkit-font-feature-settings:'liga';-webkit-font-smoothing:antialiased;font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 40;";
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector) { return Array.from(document.querySelectorAll(selector)); }
+  function setStatus(value) { document.documentElement.setAttribute('data-html-studio-elements', value); }
+
+  function placeholderSvgDataUrl(label) {
+    const safe = String(label || 'Image').replace(/[<>&"']/g, '');
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720">' +
+      '<rect width="1200" height="720" fill="#efefec"/><rect x="1" y="1" width="1198" height="718" fill="none" stroke="#c9c9c3" stroke-width="2"/>' +
+      '<path d="M430 445l105-115 82 85 65-69 108 120H410z" fill="#b7b7b0"/><circle cx="470" cy="270" r="44" fill="#b7b7b0"/>' +
+      '<text x="600" y="555" text-anchor="middle" font-family="Arial,sans-serif" font-size="34" fill="#777771">' + safe + '</text></svg>';
+    return 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+  }
+
+  function markup(type) {
+    const imagePlaceholder = placeholderSvgDataUrl('Replace image');
+    const map = {
+      frame: '<div data-unscriptly-frame="true" style="position:relative;width:100%;min-height:240px;padding:24px;overflow:hidden;background:#ffffff;border:1px solid #deded9;border-radius:12px;"><div style="font:600 14px/1.4 Arial,sans-serif;color:#777777;">Frame</div></div>',
+      group: '<div data-unscriptly-group="true" style="display:flex;flex-direction:column;gap:16px;width:100%;"><div style="padding:16px;border:1px dashed #c8c8c2;border-radius:8px;">Grouped layer</div></div>',
+      section: '<section style="padding:72px 24px;background:#ffffff;color:#111111;"><div style="width:min(1120px,100%);margin:0 auto;"><h2 style="margin:0 0 14px;font:700 40px/1.1 Arial,sans-serif;">New section</h2><p style="margin:0;max-width:720px;font:400 18px/1.6 Arial,sans-serif;color:#666666;">Add your content here. Select any element to customize it.</p></div></section>',
+      container: '<div style="width:min(1120px,100%);margin:0 auto;padding:24px;border:1px dashed #c8c8c2;">Container</div>',
+      columns2: '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;padding:24px;"><div style="min-height:120px;padding:24px;border:1px solid #deded9;border-radius:12px;">Column 1</div><div style="min-height:120px;padding:24px;border:1px solid #deded9;border-radius:12px;">Column 2</div></div>',
+      columns3: '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;padding:24px;"><div style="min-height:120px;padding:20px;border:1px solid #deded9;border-radius:12px;">Column 1</div><div style="min-height:120px;padding:20px;border:1px solid #deded9;border-radius:12px;">Column 2</div><div style="min-height:120px;padding:20px;border:1px solid #deded9;border-radius:12px;">Column 3</div></div>',
+      stack: '<div style="display:flex;flex-direction:column;gap:16px;padding:24px;"><div style="padding:20px;border:1px solid #deded9;border-radius:10px;">Stack item</div><div style="padding:20px;border:1px solid #deded9;border-radius:10px;">Stack item</div></div>',
+      row: '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:24px;"><div style="padding:16px 20px;border:1px solid #deded9;border-radius:10px;">Row item</div><div style="padding:16px 20px;border:1px solid #deded9;border-radius:10px;">Row item</div></div>',
+      box: '<div style="width:240px;min-height:160px;padding:24px;background:#f1f1ef;border:1px solid #deded9;border-radius:8px;">Box</div>',
+      card: '<article style="width:min(420px,100%);padding:28px;background:#ffffff;border:1px solid #deded9;border-radius:16px;box-shadow:0 12px 32px rgba(0,0,0,.08);"><h3 style="margin:0 0 10px;font:700 26px/1.2 Arial,sans-serif;">Card title</h3><p style="margin:0;color:#666;font:400 16px/1.55 Arial,sans-serif;">Use cards to group related content and actions.</p></article>',
+      circle: '<div aria-label="Circle shape" style="width:120px;height:120px;border-radius:999px;background:#111111;"></div>',
+      divider: '<hr style="width:100%;border:0;border-top:1px solid #d7d7d2;margin:28px 0;">',
+      spacer: '<div aria-label="Spacer" style="height:64px;width:100%;"></div>',
+      heading: '<h2 style="margin:0;font:700 40px/1.12 Arial,sans-serif;letter-spacing:-.03em;">Heading text</h2>',
+      paragraph: '<p style="margin:0;font:400 17px/1.65 Arial,sans-serif;color:#555555;">Add your paragraph text here.</p>',
+      label: '<span style="display:inline-block;font:700 12px/1 Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;color:#777777;">Label</span>',
+      quote: '<blockquote style="margin:0;padding:4px 0 4px 22px;border-left:3px solid #111111;font:500 24px/1.45 Georgia,serif;">A meaningful quote belongs here.</blockquote>',
+      button: '<a href="#" style="display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 20px;border-radius:9px;background:#111111;color:#ffffff;text-decoration:none;font:700 15px/1 Arial,sans-serif;">Button</a>',
+      link: '<a href="#" style="color:#111111;font:600 16px/1.4 Arial,sans-serif;text-underline-offset:3px;">Text link</a>',
+      image: '<img src="' + imagePlaceholder + '" alt="Image placeholder" style="display:block;width:min(720px,100%);height:auto;border-radius:12px;object-fit:cover;">',
+      video: '<video controls preload="metadata" style="display:block;width:min(800px,100%);min-height:240px;background:#111111;border-radius:12px;"></video>',
+      audio: '<audio controls preload="metadata" style="display:block;width:min(620px,100%);"></audio>',
+      icon: '<span class="material-symbols-outlined" aria-hidden="true" style="' + MATERIAL_SYMBOLS_STYLE + '">star</span>'
+    };
+    return map[type] || '';
+  }
+
+  function insert(type) {
+    const html = markup(type);
+    if (!html) return;
+    const positionInput = $('insertPositionInput');
+    plus.insertHtml(html, positionInput ? positionInput.value : 'smart', {
+      stylesheetUrl: type === 'icon' ? 'https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200' : '',
+      stylesheetKey: type === 'icon' ? 'material-symbols' : '',
+      message: 'Element added.'
+    });
+  }
+
+  function filterCatalog(query) {
+    const q = String(query || '').trim().toLowerCase();
+    qsa('.element-tile').forEach(tile => {
+      const haystack = ((tile.textContent || '') + ' ' + (tile.dataset.search || '')).toLowerCase();
+      tile.classList.toggle('filtered-out', Boolean(q) && !haystack.includes(q));
+    });
+  }
+
+  function init() {
+    qsa('.element-tile').forEach(button => {
+      button.addEventListener('click', () => insert(button.dataset.element));
+    });
+    const search = $('elementSearchInput');
+    if (search) search.addEventListener('input', () => filterCatalog(search.value));
+    setStatus('ready');
+  }
+
+  try {
+    init();
+  } catch (error) {
+    console.error('[HTML Studio] Elements module failed:', error);
+    setStatus('error');
+    plus.toast('Elements toolbar could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

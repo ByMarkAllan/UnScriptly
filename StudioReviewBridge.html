@@ -1,0 +1,241 @@
+<script>
+(function () {
+  'use strict';
+  var frame = document.getElementById('previewFrame');
+  var root = document.documentElement;
+  var MARKER = '__unscriptly_review_bridge__';
+
+  function setStatus(value) { root.setAttribute('data-html-studio-review-bridge', value); }
+
+  function previewReviewBridge() {
+    var SOURCE = 'unscriptly-html-studio';
+    var wireframeSheet = null;
+    var wireframeEnabled = false;
+    var pickMode = false;
+    var notePaths = [];
+    var raf = 0;
+
+    var WIREFRAME_RULES = [
+      "html{color-scheme:light!important;filter:none!important;background:#f2f2f0!important;}",
+      "html,body{background:#f2f2f0!important;}",
+      "html body{color:transparent!important;}",
+      "html body *{box-shadow:none!important;text-shadow:none!important;background-image:none!important;background-color:transparent!important;color:transparent!important;border-color:#cfcfca!important;outline-color:#cfcfca!important;}",
+      "html body *::before,html body *::after{color:transparent!important;text-shadow:none!important;box-shadow:none!important;background-image:none!important;}",
+      "html section,html article,html header,html footer,html nav,html aside,html main,html [data-unscriptly-frame=\"true\"],html [data-unscriptly-group=\"true\"]{background-color:#f8f8f6!important;}",
+      "html [class*=\"card\"],html [class*=\"panel\"],html [class*=\"tile\"],html [class*=\"surface\"],html fieldset{background-color:#fbfbfa!important;border-color:#d3d3ce!important;}",
+      "html h1,html h2,html h3,html h4,html h5,html h6{color:transparent!important;background-image:linear-gradient(#bfc0bc,#bfc0bc)!important;background-repeat:no-repeat!important;background-position:left center!important;border-color:transparent!important;}",
+      "html h1{background-size:min(78%,38rem) .72em!important;}",
+      "html h2{background-size:min(68%,30rem) .68em!important;}",
+      "html h3{background-size:min(58%,24rem) .64em!important;}",
+      "html h4,html h5,html h6{background-size:min(48%,20rem) .58em!important;}",
+      "html p,html li,html dd,html dt,html blockquote,html figcaption{color:transparent!important;background-image:repeating-linear-gradient(to bottom,#d0d1cd 0 .54em,transparent .54em 1.45em)!important;background-size:94% 100%!important;background-repeat:no-repeat!important;background-position:left top!important;}",
+      "html label,html small,html th,html td,html a:not(.button):not([class*=\"btn\"]),html [data-unscriptly-skeleton-text=\"label\"]{color:transparent!important;background-image:linear-gradient(#d0d1cd,#d0d1cd)!important;background-repeat:no-repeat!important;background-position:left center!important;background-size:min(72%,14rem) .56em!important;}",
+      "html [data-unscriptly-skeleton-text=\"copy\"]{color:transparent!important;background-image:repeating-linear-gradient(to bottom,#d0d1cd 0 .52em,transparent .52em 1.38em)!important;background-size:90% 100%!important;background-repeat:no-repeat!important;background-position:left top!important;}",
+      "html button,html input,html select,html textarea,html [role=\"button\"],html .button,html [class*=\"btn\"]{color:transparent!important;background:#d4d5d1!important;border:1px solid #c2c3be!important;box-shadow:none!important;text-shadow:none!important;}",
+      "html input::placeholder,html textarea::placeholder{color:transparent!important;}",
+      "html img,html picture,html video,html canvas,html svg,html iframe,html object,html embed{filter:grayscale(1) contrast(0) brightness(1.62)!important;opacity:1!important;background:#d2d3cf!important;border-color:#c4c5c0!important;outline:1px solid #c4c5c0!important;outline-offset:-1px!important;box-shadow:none!important;}",
+      "html hr{border-color:#c8c9c4!important;background:#c8c9c4!important;}",
+      "html table{border-color:#cecfca!important;background:#fafaf8!important;}",
+      "html tr,html thead,html tbody,html tfoot{background:transparent!important;}",
+      "html th,html td{border-color:#d4d5d0!important;}",
+      "html progress,html meter{filter:grayscale(1) contrast(0) brightness(1.45)!important;}",
+      "html [data-unscriptly-note-pick]{cursor:crosshair!important;}"
+    ];
+    var WIREFRAME_CSS = WIREFRAME_RULES.join('');
+
+    function post(type, payload) {
+      parent.postMessage(Object.assign({ source: SOURCE, type: type }, payload || {}), '*');
+    }
+    function pathKey(parts) { return parts && parts.length ? parts.join('.') : 'body'; }
+    function structuralPath(el) {
+      if (!el || !document.body) return '';
+      if (el === document.body) return 'body';
+      var parts = [], cursor = el;
+      while (cursor && cursor !== document.body) {
+        var parentEl = cursor.parentElement;
+        if (!parentEl) return '';
+        var index = Array.prototype.indexOf.call(parentEl.children, cursor);
+        if (index < 0) return '';
+        parts.unshift(index);
+        cursor = parentEl;
+      }
+      return cursor === document.body ? pathKey(parts) : '';
+    }
+    function pathArray(value) {
+      if (!value || value === 'body') return [];
+      return String(value).split('.').filter(Boolean).map(function (part) { return parseInt(part, 10); });
+    }
+    function resolvePath(value) {
+      var node = document.body;
+      var parts = pathArray(value);
+      for (var i = 0; i < parts.length; i++) {
+        if (!node || !node.children || !node.children[parts[i]]) return null;
+        node = node.children[parts[i]];
+      }
+      return node;
+    }
+    function ensureSheet() {
+      if (wireframeSheet) return wireframeSheet;
+
+      // Preferred path: constructable stylesheet. It never becomes part of the
+      // user's DOM/source and therefore cannot leak into copied/exported HTML.
+      try {
+        if (window.CSSStyleSheet && 'adoptedStyleSheets' in document) {
+          var adopted = new CSSStyleSheet();
+          adopted.replaceSync('');
+          document.adoptedStyleSheets = Array.prototype.slice.call(document.adoptedStyleSheets || []).concat([adopted]);
+          wireframeSheet = {
+            mode: 'adopted',
+            replaceSync: function (css) { adopted.replaceSync(css || ''); }
+          };
+          return wireframeSheet;
+        }
+      } catch (_) {}
+
+      // Compatibility path: append rules to the editor's own runtime-only
+      // stylesheet. StudioCore removes this stylesheet before serializing HTML.
+      try {
+        var runtimeStyle = document.getElementById('__unscriptly_editor_style__');
+        var sheet = runtimeStyle && runtimeStyle.sheet;
+        if (sheet) {
+          var baseRuleCount = sheet.cssRules.length;
+          wireframeSheet = {
+            mode: 'editor-cssom',
+            replaceSync: function (css) {
+              while (sheet.cssRules.length > baseRuleCount) sheet.deleteRule(sheet.cssRules.length - 1);
+              if (!css) return;
+              for (var i = 0; i < WIREFRAME_RULES.length; i++) {
+                try { sheet.insertRule(WIREFRAME_RULES[i], sheet.cssRules.length); } catch (_) {}
+              }
+            }
+          };
+          return wireframeSheet;
+        }
+      } catch (_) {}
+
+      wireframeSheet = null;
+      return null;
+    }
+    function setWireframe(enabled) {
+      wireframeEnabled = !!enabled;
+      var sheet = ensureSheet();
+      if (sheet) {
+        try { sheet.replaceSync(wireframeEnabled ? WIREFRAME_CSS : ''); } catch (_) {}
+      }
+      post('NCE_REVIEW_WIREFRAME_STATE', { enabled: wireframeEnabled, enhanced: !!sheet, skeletonRuntime: !!sheet });
+      schedulePositions();
+    }
+    function elementLabel(el) {
+      if (!el) return 'Element';
+      var tag = String(el.tagName || '').toLowerCase();
+      var text = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text) return text.slice(0, 80);
+      if (el.id) return tag + ' #' + el.id;
+      if (el.classList && el.classList.length) return tag + ' .' + Array.prototype.slice.call(el.classList, 0, 2).join('.');
+      return tag || 'Element';
+    }
+    function sendPositions() {
+      raf = 0;
+      var items = [];
+      for (var i = 0; i < notePaths.length; i++) {
+        var note = notePaths[i] || {};
+        var target = resolvePath(note.path || '');
+        if (!target) {
+          items.push({ id: note.id, path: note.path || '', found: false });
+          continue;
+        }
+        var rect = target.getBoundingClientRect();
+        items.push({
+          id: note.id,
+          path: note.path || '',
+          found: true,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight
+        });
+      }
+      post('NCE_REVIEW_NOTE_POSITIONS', { items: items });
+    }
+    function schedulePositions() {
+      if (raf) return;
+      raf = window.requestAnimationFrame(sendPositions);
+    }
+    function setNotePaths(items) {
+      notePaths = Array.isArray(items) ? items.slice(0, 500) : [];
+      schedulePositions();
+    }
+
+    window.addEventListener('message', function (event) {
+      var msg = event.data || {};
+      if (msg.source !== SOURCE) return;
+      if (msg.type === 'NCE_REVIEW_WIREFRAME_SET') return setWireframe(!!msg.enabled);
+      if (msg.type === 'NCE_REVIEW_NOTE_PICK_MODE') {
+        pickMode = !!msg.enabled;
+        document.documentElement.toggleAttribute('data-unscriptly-note-pick', pickMode);
+        return;
+      }
+      if (msg.type === 'NCE_REVIEW_NOTE_PATHS') return setNotePaths(msg.items || []);
+      if (msg.type === 'NCE_REVIEW_NOTE_REFRESH') return schedulePositions();
+      if (msg.type === 'NCE_REVIEW_REVEAL_PATH') {
+        var target = resolvePath(msg.path || '');
+        if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        return;
+      }
+    });
+
+    document.addEventListener('click', function (event) {
+      if (!pickMode) return;
+      var target = event.target && event.target.closest ? event.target.closest('[data-unscriptly-editor-id]') : null;
+      if (!target || !document.body.contains(target)) return;
+      var path = structuralPath(target);
+      if (!path) return;
+      pickMode = false;
+      document.documentElement.removeAttribute('data-unscriptly-note-pick');
+      event.preventDefault();
+      post('NCE_REVIEW_NOTE_ANCHOR', { path: path, label: elementLabel(target), domId: target.id || '', tag: String(target.tagName || '').toLowerCase(), classes: Array.prototype.slice.call(target.classList || [], 0, 6) });
+    }, true);
+
+    window.addEventListener('scroll', schedulePositions, true);
+    window.addEventListener('resize', schedulePositions);
+    if (window.ResizeObserver && document.body) {
+      try { new ResizeObserver(schedulePositions).observe(document.body); } catch (_) {}
+    }
+
+    var runtimeSheet = ensureSheet();
+    post('NCE_REVIEW_BRIDGE_READY', { constructableStylesheets: !!(runtimeSheet && runtimeSheet.mode === 'adopted'), skeletonRuntime: !!runtimeSheet });
+
+    try {
+      var loader = document.currentScript;
+      if (loader && loader.parentNode) loader.parentNode.removeChild(loader);
+    } catch (_) {}
+  }
+
+  try {
+    if (!frame || !window.HTMLIFrameElement) throw new Error('Preview iframe is unavailable.');
+    var descriptor = Object.getOwnPropertyDescriptor(frame, 'srcdoc') || Object.getOwnPropertyDescriptor(window.HTMLIFrameElement.prototype, 'srcdoc');
+    if (!descriptor || typeof descriptor.get !== 'function' || typeof descriptor.set !== 'function') throw new Error('This browser does not expose the iframe srcdoc accessor.');
+
+    function injectBridge(html) {
+      var text = String(html == null ? '' : html);
+      if (text.indexOf(MARKER) >= 0) return text;
+      var payload = '<script id="' + MARKER + '">(' + previewReviewBridge.toString() + ')();<\/script>';
+      var index = text.toLowerCase().lastIndexOf('</body>');
+      return index >= 0 ? text.slice(0, index) + payload + text.slice(index) : text + payload;
+    }
+
+    Object.defineProperty(frame, 'srcdoc', {
+      configurable: true,
+      enumerable: true,
+      get: function () { return descriptor.get.call(frame); },
+      set: function (value) { descriptor.set.call(frame, injectBridge(value)); }
+    });
+    setStatus('ready');
+  } catch (error) {
+    console.error('[HTML Studio] Review preview bridge failed:', error);
+    setStatus('error');
+  }
+})();
+</script>

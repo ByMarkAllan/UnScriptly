@@ -1,0 +1,421 @@
+<script>
+(() => {
+  'use strict';
+
+  const plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  const $ = id => document.getElementById(id);
+  const setStatus = value => document.documentElement.setAttribute('data-html-studio-components', value);
+  const state = { mode: 'elements', folders: [], folderId: '', components: [], search: '' };
+
+  const BUILT_INS = [
+    {
+      id: 'navbar-simple', category: 'Navigation', name: 'Simple Navbar', glyph: '☰',
+      description: 'Brand, links, and primary CTA.',
+      html: `<header data-unscriptly-component="Simple Navbar" style="width:100%;border-bottom:1px solid #e4e4df;background:#fff;"><div style="width:min(1180px,calc(100% - 40px));margin:auto;min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:24px;"><a href="#" style="font:800 18px/1 Arial,sans-serif;color:#111;text-decoration:none;">Brand</a><nav style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;"><a href="#" style="color:#555;text-decoration:none;font:600 14px/1.4 Arial,sans-serif;">Features</a><a href="#" style="color:#555;text-decoration:none;font:600 14px/1.4 Arial,sans-serif;">About</a><a href="#" style="color:#555;text-decoration:none;font:600 14px/1.4 Arial,sans-serif;">Contact</a><a href="#" style="display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:8px;background:#111;color:#fff;text-decoration:none;font:700 13px/1 Arial,sans-serif;">Get started</a></nav></div></header>`
+    },
+    {
+      id: 'hero-centered', category: 'Hero', name: 'Centered Hero', glyph: 'H',
+      description: 'Eyebrow, headline, copy, and CTAs.',
+      html: `<section data-unscriptly-component="Centered Hero" style="padding:96px 24px;background:#fff;text-align:center;color:#111;"><div style="width:min(900px,100%);margin:auto;"><span style="display:inline-flex;padding:7px 10px;border:1px solid #d9d9d4;border-radius:999px;font:800 11px/1 Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;">New experience</span><h1 style="margin:22px auto 18px;font:800 clamp(48px,8vw,86px)/.98 Arial,sans-serif;letter-spacing:-.055em;max-width:880px;">A clear headline for your next big idea.</h1><p style="max-width:680px;margin:0 auto;color:#666;font:400 19px/1.6 Arial,sans-serif;">Use this section to explain the product, value proposition, or primary action in a concise way.</p><div style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:30px;"><a href="#" style="display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 21px;border-radius:9px;background:#111;color:#fff;text-decoration:none;font:700 14px/1 Arial,sans-serif;">Primary action</a><a href="#" style="display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 21px;border:1px solid #d6d6d1;border-radius:9px;color:#111;text-decoration:none;font:700 14px/1 Arial,sans-serif;">Secondary action</a></div></div></section>`
+    },
+    {
+      id: 'hero-split', category: 'Hero', name: 'Split Hero', glyph: '▥',
+      description: 'Copy and media in a two-column hero.',
+      html: `<section data-unscriptly-component="Split Hero" style="padding:72px 24px;background:#f7f7f5;color:#111;"><div style="width:min(1180px,100%);margin:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:48px;align-items:center;"><div><span style="font:800 11px/1 Arial,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#777;">Product story</span><h1 style="margin:18px 0;font:800 clamp(44px,6vw,72px)/1 Arial,sans-serif;letter-spacing:-.05em;">Headline with room for context.</h1><p style="margin:0;color:#666;font:400 18px/1.65 Arial,sans-serif;max-width:620px;">Pair a strong value proposition with a visual, screenshot, illustration, or product preview.</p><a href="#" style="display:inline-flex;margin-top:28px;align-items:center;min-height:46px;padding:0 19px;border-radius:9px;background:#111;color:#fff;text-decoration:none;font:700 14px/1 Arial,sans-serif;">Explore more</a></div><div aria-label="Media placeholder" style="aspect-ratio:4/3;border:1px solid #d1d1cc;border-radius:18px;background:linear-gradient(135deg,#e5e5e1,#fdfdfc);display:grid;place-items:center;color:#999;font:700 13px/1 Arial,sans-serif;">Replace with media</div></div></section>`
+    },
+    {
+      id: 'features-three', category: 'Content', name: '3 Feature Cards', glyph: '▦',
+      description: 'Three reusable feature cards.',
+      html: `<section data-unscriptly-component="3 Feature Cards" style="padding:72px 24px;background:#fff;color:#111;"><div style="width:min(1120px,100%);margin:auto;"><div style="margin-bottom:30px;"><span style="font:800 11px/1 Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;color:#777;">Features</span><h2 style="margin:12px 0 0;font:800 42px/1.05 Arial,sans-serif;letter-spacing:-.04em;">Built around what matters.</h2></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">${[1,2,3].map(i=>`<article style="padding:26px;border:1px solid #deded9;border-radius:15px;background:#fff;"><div style="width:38px;height:38px;border-radius:10px;background:#111;color:#fff;display:grid;place-items:center;font:800 14px/1 Arial,sans-serif;">0${i}</div><h3 style="margin:34px 0 9px;font:800 22px/1.1 Arial,sans-serif;">Feature ${i}</h3><p style="margin:0;color:#666;font:400 15px/1.6 Arial,sans-serif;">Explain the value of this capability in one or two concise sentences.</p></article>`).join('')}</div></div></section>`
+    },
+    {
+      id: 'stats-four', category: 'Content', name: '4 Stat Cards', glyph: '#',
+      description: 'A responsive KPI or metrics row.',
+      html: `<section data-unscriptly-component="4 Stat Cards" style="padding:42px 24px;background:#f7f7f5;"><div style="width:min(1120px,100%);margin:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;">${['24K','98%','4.9','12x'].map((v,i)=>`<article style="padding:24px;background:#fff;border:1px solid #deded9;border-radius:14px;"><span style="font:700 11px/1 Arial,sans-serif;color:#888;text-transform:uppercase;letter-spacing:.09em;">Metric ${i+1}</span><strong style="display:block;margin-top:15px;font:800 38px/1 Arial,sans-serif;letter-spacing:-.04em;">${v}</strong><small style="display:block;margin-top:8px;color:#666;font:500 12px/1.45 Arial,sans-serif;">Supporting context</small></article>`).join('')}</div></section>`
+    },
+    {
+      id: 'testimonial', category: 'Social proof', name: 'Testimonial Card', glyph: '“',
+      description: 'Quote, person, role, and avatar.',
+      html: `<figure data-unscriptly-component="Testimonial Card" style="width:min(720px,100%);margin:24px auto;padding:34px;border:1px solid #deded9;border-radius:18px;background:#fff;color:#111;"><blockquote style="margin:0;font:600 26px/1.45 Georgia,serif;">“This is where a concise customer quote can communicate trust and reinforce the value of the experience.”</blockquote><figcaption style="display:flex;align-items:center;gap:12px;margin-top:28px;"><span style="width:44px;height:44px;border-radius:50%;background:#e5e5e1;display:block;"></span><span><strong style="display:block;font:800 13px/1.2 Arial,sans-serif;">Customer Name</strong><small style="display:block;margin-top:5px;color:#777;font:500 11px/1.2 Arial,sans-serif;">Role · Company</small></span></figcaption></figure>`
+    },
+    {
+      id: 'pricing-three', category: 'Commerce', name: '3 Pricing Cards', glyph: '$',
+      description: 'Three tiers with one featured plan.',
+      html: `<section data-unscriptly-component="3 Pricing Cards" style="padding:80px 24px;background:#fff;color:#111;"><div style="width:min(1120px,100%);margin:auto;"><div style="text-align:center;margin-bottom:36px;"><h2 style="margin:0;font:800 44px/1.05 Arial,sans-serif;letter-spacing:-.04em;">Choose a plan</h2><p style="color:#666;font:400 17px/1.6 Arial,sans-serif;">Simple pricing for different stages.</p></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;">${['Starter','Pro','Business'].map((n,i)=>`<article style="padding:28px;border:${i===1?'2px solid #111':'1px solid #deded9'};border-radius:18px;background:${i===1?'#111':'#fff'};color:${i===1?'#fff':'#111'};"><span style="font:800 12px/1 Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;">${n}</span><strong style="display:block;margin:20px 0 14px;font:800 42px/1 Arial,sans-serif;">$${[19,49,99][i]}<small style="font-size:13px;font-weight:600;opacity:.6;"> / mo</small></strong><p style="margin:0 0 22px;opacity:.67;font:400 14px/1.55 Arial,sans-serif;">A concise description of what this tier includes.</p><a href="#" style="display:flex;justify-content:center;align-items:center;min-height:44px;border-radius:8px;background:${i===1?'#fff':'#111'};color:${i===1?'#111':'#fff'};text-decoration:none;font:800 13px/1 Arial,sans-serif;">Choose ${n}</a></article>`).join('')}</div></div></section>`
+    },
+    {
+      id: 'cta-banner', category: 'Actions', name: 'CTA Banner', glyph: '→',
+      description: 'High-contrast call-to-action section.',
+      html: `<section data-unscriptly-component="CTA Banner" style="padding:32px 24px;background:#fff;"><div style="width:min(1120px,100%);margin:auto;padding:42px;border-radius:20px;background:#111;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:28px;flex-wrap:wrap;"><div><h2 style="margin:0 0 8px;font:800 36px/1.05 Arial,sans-serif;letter-spacing:-.035em;">Ready to take the next step?</h2><p style="margin:0;color:#aaa;font:400 15px/1.55 Arial,sans-serif;">Use this banner to focus attention on a single conversion goal.</p></div><a href="#" style="display:inline-flex;align-items:center;min-height:46px;padding:0 19px;border-radius:9px;background:#fff;color:#111;text-decoration:none;font:800 13px/1 Arial,sans-serif;">Get started →</a></div></section>`
+    },
+    {
+      id: 'faq', category: 'Content', name: 'FAQ Section', glyph: '?',
+      description: 'Accessible details/summary FAQ list.',
+      html: `<section data-unscriptly-component="FAQ Section" style="padding:80px 24px;background:#f7f7f5;color:#111;"><div style="width:min(820px,100%);margin:auto;"><span style="font:800 11px/1 Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;color:#777;">FAQ</span><h2 style="margin:12px 0 28px;font:800 44px/1.05 Arial,sans-serif;letter-spacing:-.04em;">Common questions</h2>${['What does this include?','Can I customize it?','How does this work?','Where is my data stored?'].map((q,i)=>`<details style="border-top:1px solid #d6d6d1;padding:18px 0;" ${i===0?'open':''}><summary style="cursor:pointer;font:800 16px/1.4 Arial,sans-serif;">${q}</summary><p style="margin:12px 0 0;color:#666;font:400 14px/1.6 Arial,sans-serif;">Add the answer to this question here. Keep it clear, specific, and easy to scan.</p></details>`).join('')}</div></section>`
+    },
+    {
+      id: 'team-three', category: 'People', name: 'Team Grid', glyph: '●',
+      description: 'Three profile cards with photo placeholders.',
+      html: `<section data-unscriptly-component="Team Grid" style="padding:72px 24px;background:#fff;color:#111;"><div style="width:min(1120px,100%);margin:auto;"><h2 style="margin:0 0 28px;font:800 42px/1.05 Arial,sans-serif;letter-spacing:-.04em;">Meet the team</h2><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">${[1,2,3].map(i=>`<article><div style="aspect-ratio:4/5;border-radius:14px;background:#e9e9e5;display:grid;place-items:center;color:#999;font:700 12px/1 Arial,sans-serif;">Photo</div><h3 style="margin:14px 0 4px;font:800 18px/1.2 Arial,sans-serif;">Person ${i}</h3><p style="margin:0;color:#777;font:500 13px/1.4 Arial,sans-serif;">Role / discipline</p></article>`).join('')}</div></div></section>`
+    },
+    {
+      id: 'contact-form', category: 'Forms', name: 'Contact Form', glyph: '✉',
+      description: 'Name, email, message, and submit action.',
+      html: `<section data-unscriptly-component="Contact Form" style="padding:72px 24px;background:#f7f7f5;color:#111;"><div style="width:min(760px,100%);margin:auto;padding:30px;background:#fff;border:1px solid #deded9;border-radius:18px;"><h2 style="margin:0 0 8px;font:800 36px/1.05 Arial,sans-serif;letter-spacing:-.04em;">Get in touch</h2><p style="margin:0 0 26px;color:#666;font:400 14px/1.55 Arial,sans-serif;">Tell us what you are working on.</p><form><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;"><label style="display:grid;gap:7px;font:700 12px/1.3 Arial,sans-serif;">Name<input type="text" style="min-height:44px;border:1px solid #d8d8d3;border-radius:8px;padding:0 12px;"></label><label style="display:grid;gap:7px;font:700 12px/1.3 Arial,sans-serif;">Email<input type="email" style="min-height:44px;border:1px solid #d8d8d3;border-radius:8px;padding:0 12px;"></label></div><label style="display:grid;gap:7px;margin-top:12px;font:700 12px/1.3 Arial,sans-serif;">Message<textarea rows="5" style="border:1px solid #d8d8d3;border-radius:8px;padding:12px;resize:vertical;"></textarea></label><button type="submit" style="margin-top:14px;min-height:44px;padding:0 18px;border:0;border-radius:8px;background:#111;color:#fff;font:800 13px/1 Arial,sans-serif;cursor:pointer;">Send message</button></form></div></section>`
+    },
+    {
+      id: 'footer-columns', category: 'Navigation', name: 'Multi-column Footer', glyph: '▤',
+      description: 'Brand, grouped links, and legal row.',
+      html: `<footer data-unscriptly-component="Multi-column Footer" style="padding:56px 24px 28px;background:#111;color:#fff;"><div style="width:min(1120px,100%);margin:auto;"><div style="display:grid;grid-template-columns:1.4fr repeat(3,minmax(120px,1fr));gap:32px;"><div><strong style="font:800 18px/1 Arial,sans-serif;">Brand</strong><p style="max-width:300px;color:#aaa;font:400 13px/1.6 Arial,sans-serif;">A concise statement about your product, company, or mission.</p></div>${['Product','Company','Resources'].map(t=>`<nav><strong style="font:800 12px/1 Arial,sans-serif;">${t}</strong><div style="display:grid;gap:10px;margin-top:14px;"><a href="#" style="color:#aaa;text-decoration:none;font:500 12px/1.4 Arial,sans-serif;">Overview</a><a href="#" style="color:#aaa;text-decoration:none;font:500 12px/1.4 Arial,sans-serif;">Details</a><a href="#" style="color:#aaa;text-decoration:none;font:500 12px/1.4 Arial,sans-serif;">Support</a></div></nav>`).join('')}</div><div style="display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-top:42px;padding-top:20px;border-top:1px solid #333;color:#777;font:500 11px/1.4 Arial,sans-serif;"><span>© Company</span><span>Privacy · Terms</span></div></div></footer>`
+    }
+  ];
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function rpc(method, arg) {
+    return new Promise((resolve, reject) => {
+      if (!(window.google && google.script && google.script.run)) return reject(new Error('Google Drive component storage is available only in the deployed Apps Script web app.'));
+      const runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(error => reject(new Error(String(error && error.message || error || 'Apps Script request failed.'))));
+      try {
+        if (method === 'htmlStudioListComponentFolders') runner.htmlStudioListComponentFolders();
+        else if (method === 'htmlStudioCreateComponentFolder') runner.htmlStudioCreateComponentFolder(arg);
+        else if (method === 'htmlStudioListComponents') runner.htmlStudioListComponents(arg);
+        else if (method === 'htmlStudioSaveComponent') runner.htmlStudioSaveComponent(arg);
+        else if (method === 'htmlStudioLoadComponent') runner.htmlStudioLoadComponent(arg);
+        else if (method === 'htmlStudioDeleteComponent') runner.htmlStudioDeleteComponent(arg);
+        else reject(new Error('Unknown component request: ' + method));
+      } catch (error) { reject(error); }
+    });
+  }
+
+  function insertionPosition() {
+    const input = $('insertPositionInput');
+    return input ? input.value : 'smart';
+  }
+
+  function locateSelected(doc, selection) {
+    if (!selection) return null;
+    if (selection.id) {
+      const byId = doc.getElementById(selection.id);
+      if (byId) return byId;
+    }
+    if (selection.path) {
+      try {
+        const byPath = doc.querySelector(selection.path);
+        if (byPath) return byPath;
+      } catch (_) {}
+    }
+    const candidates = selection.tag ? Array.from(doc.querySelectorAll(selection.tag)) : [];
+    if (selection.classes && selection.classes.length) {
+      const matched = candidates.find(el => selection.classes.every(cls => el.classList.contains(cls)));
+      if (matched) return matched;
+    }
+    return candidates[0] || null;
+  }
+
+  function selectedOuterHtml() {
+    const selection = plus.getSelection();
+    if (!selection) return '';
+    const source = plus.readSource();
+    if (!source) return '';
+    const doc = new DOMParser().parseFromString(source, 'text/html');
+    const target = locateSelected(doc, selection);
+    return target ? target.outerHTML : '';
+  }
+
+  function suggestedName() {
+    const selection = plus.getSelection();
+    if (!selection) return 'Custom Component';
+    if (selection.id) return selection.id.replace(/[-_]+/g,' ').replace(/\b\w/g, c => c.toUpperCase()).slice(0,80);
+    const cls = selection.classes && selection.classes[0] ? selection.classes[0].replace(/[-_]+/g,' ') : '';
+    if (cls) return cls.replace(/\b\w/g, c => c.toUpperCase()).slice(0,80);
+    return (selection.tag || 'Custom') + ' Component';
+  }
+
+  function injectUi() {
+    const view = $('elementsLibraryView');
+    const catalog = $('elementCatalog');
+    if (!view || !catalog || $('componentLibraryRoot')) return;
+
+    const controls = view.querySelector('.library-controls');
+    const switcher = document.createElement('div');
+    switcher.className = 'element-component-switch';
+    switcher.innerHTML = '<button id="elementsModeBtn" class="active" type="button">Elements</button><button id="componentsModeBtn" type="button">Components</button>';
+    if (controls) controls.appendChild(switcher);
+
+    const root = document.createElement('div');
+    root.id = 'componentLibraryRoot';
+    root.className = 'component-library hidden';
+    root.innerHTML = `
+      <section class="component-section">
+        <div class="component-section-head"><div><div class="element-group-title">Pre-built Components</div><div class="field-help">Responsive sections and patterns you can insert, then edit normally.</div></div><span class="component-count">${BUILT_INS.length}</span></div>
+        <input id="componentSearchInput" class="field" type="search" placeholder="Search components…" autocomplete="off">
+        <div class="component-category-row" id="componentCategoryRow"></div>
+        <div class="component-grid" id="componentGrid"></div>
+      </section>
+      <section class="component-section custom-component-section">
+        <div class="component-section-head"><div><div class="element-group-title">My Components</div><div class="field-help">Save selected frames, groups, sections, or elements to Google Drive.</div></div><button id="refreshComponentsBtn" class="icon-btn compact-icon-btn" type="button" title="Refresh components">↻</button></div>
+        <div class="component-folder-row"><select id="componentFolderInput" class="field" aria-label="Component folder"><option value="">Loading folders…</option></select><button id="newComponentFolderBtn" class="button secondary" type="button">New folder</button></div>
+        <button id="saveSelectedComponentBtn" class="button primary full-width-button" type="button">Save selected as component</button>
+        <div id="componentDriveStatus" class="field-help component-drive-status">Custom components are stored in Google Drive.</div>
+        <div id="customComponentList" class="custom-component-list"></div>
+      </section>`;
+    catalog.parentNode.insertBefore(root, catalog);
+
+    const saveModal = document.createElement('div');
+    saveModal.className = 'modal-backdrop hidden';
+    saveModal.id = 'saveComponentModal';
+    saveModal.innerHTML = `<div class="modal-card"><div class="modal-head"><div><div class="eyebrow">Components</div><h2>Save component</h2></div><button class="icon-btn" id="closeSaveComponentModalBtn" type="button">×</button></div><div class="modal-body"><label class="field-label" for="saveComponentNameInput">Component name</label><input id="saveComponentNameInput" class="field" maxlength="100" placeholder="Hero banner"><label class="field-label" for="saveComponentFolderInput">Folder</label><select id="saveComponentFolderInput" class="field"></select><div class="field-help">The selected element is saved as reusable HTML. CSS classes remain intact; page-specific styles may still be required.</div></div><div class="modal-foot"><button id="cancelSaveComponentBtn" class="button secondary" type="button">Cancel</button><button id="confirmSaveComponentBtn" class="button primary" type="button">Save to Drive</button></div></div>`;
+    document.body.appendChild(saveModal);
+
+    const folderModal = document.createElement('div');
+    folderModal.className = 'modal-backdrop hidden';
+    folderModal.id = 'newComponentFolderModal';
+    folderModal.innerHTML = `<div class="modal-card"><div class="modal-head"><div><div class="eyebrow">Components</div><h2>New component folder</h2></div><button class="icon-btn" id="closeComponentFolderModalBtn" type="button">×</button></div><div class="modal-body"><label class="field-label" for="newComponentFolderNameInput">Folder name</label><input id="newComponentFolderNameInput" class="field" maxlength="100" placeholder="Headers"></div><div class="modal-foot"><button id="cancelComponentFolderBtn" class="button secondary" type="button">Cancel</button><button id="confirmComponentFolderBtn" class="button primary" type="button">Create folder</button></div></div>`;
+    document.body.appendChild(folderModal);
+  }
+
+  function setMode(mode) {
+    state.mode = mode === 'components' ? 'components' : 'elements';
+    const catalog = $('elementCatalog');
+    const root = $('componentLibraryRoot');
+    if (catalog) catalog.classList.toggle('hidden', state.mode !== 'elements');
+    if (root) root.classList.toggle('hidden', state.mode !== 'components');
+    $('elementsModeBtn')?.classList.toggle('active', state.mode === 'elements');
+    $('componentsModeBtn')?.classList.toggle('active', state.mode === 'components');
+    if (state.mode === 'components') loadFolders(false);
+  }
+
+  function renderBuiltIns(category) {
+    const grid = $('componentGrid');
+    if (!grid) return;
+    const query = String(state.search || '').trim().toLowerCase();
+    const items = BUILT_INS.filter(item => {
+      const categoryOk = !category || category === 'All' || item.category === category;
+      const searchOk = !query || (item.name + ' ' + item.category + ' ' + item.description).toLowerCase().includes(query);
+      return categoryOk && searchOk;
+    });
+    grid.innerHTML = '';
+    items.forEach(item => {
+      const card = document.createElement('article');
+      card.className = 'component-card';
+      card.innerHTML = `<div class="component-card-preview"><span>${escapeHtml(item.glyph)}</span><i></i><i></i><i></i></div><div class="component-card-copy"><span class="component-card-category">${escapeHtml(item.category)}</span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.description)}</small></div><button type="button" class="button secondary component-insert-btn">Add</button>`;
+      card.querySelector('.component-insert-btn').addEventListener('click', () => plus.insertHtml(item.html, insertionPosition(), { message: item.name + ' added.' }));
+      grid.appendChild(card);
+    });
+    if (!items.length) grid.innerHTML = '<div class="component-empty">No components match that search.</div>';
+  }
+
+  function renderCategories() {
+    const row = $('componentCategoryRow');
+    if (!row) return;
+    const categories = ['All'].concat(Array.from(new Set(BUILT_INS.map(item => item.category))));
+    row.innerHTML = '';
+    categories.forEach((name, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'component-category' + (index === 0 ? ' active' : '');
+      button.textContent = name;
+      button.addEventListener('click', () => {
+        row.querySelectorAll('.component-category').forEach(btn => btn.classList.remove('active'));
+        button.classList.add('active');
+        renderBuiltIns(name);
+      });
+      row.appendChild(button);
+    });
+  }
+
+  function syncFolderSelects() {
+    ['componentFolderInput','saveComponentFolderInput'].forEach(id => {
+      const select = $(id);
+      if (!select) return;
+      const previous = state.folderId || select.value;
+      select.innerHTML = '';
+      state.folders.forEach(folder => {
+        const option = document.createElement('option');
+        option.value = folder.id;
+        option.textContent = folder.name + (folder.componentCount ? ' · ' + folder.componentCount : '');
+        select.appendChild(option);
+      });
+      if (state.folders.some(folder => folder.id === previous)) select.value = previous;
+      if (!select.value && state.folders[0]) select.value = state.folders[0].id;
+    });
+    const selected = $('componentFolderInput');
+    state.folderId = selected ? selected.value : (state.folders[0] ? state.folders[0].id : '');
+  }
+
+  async function loadFolders(showToast) {
+    if (!(window.google && google.script && google.script.run)) {
+      const status = $('componentDriveStatus');
+      if (status) status.textContent = 'Deploy in Google Apps Script to save custom components to Drive.';
+      return;
+    }
+    try {
+      state.folders = await rpc('htmlStudioListComponentFolders');
+      syncFolderSelects();
+      await loadCustomComponents();
+      if (showToast) plus.toast('Component library refreshed.');
+    } catch (error) {
+      console.error('[HTML Studio] component folder load failed:', error);
+      const status = $('componentDriveStatus');
+      if (status) status.textContent = 'Drive component folders could not be loaded.';
+    }
+  }
+
+  async function loadCustomComponents() {
+    const list = $('customComponentList');
+    if (!list) return;
+    const folderId = $('componentFolderInput')?.value || state.folderId;
+    state.folderId = folderId;
+    if (!folderId) { list.innerHTML = '<div class="component-empty">Create a component folder to begin.</div>'; return; }
+    list.innerHTML = '<div class="component-empty">Loading components…</div>';
+    try {
+      state.components = await rpc('htmlStudioListComponents', folderId);
+      renderCustomComponents();
+    } catch (error) {
+      list.innerHTML = '<div class="component-empty">Could not load this folder.</div>';
+    }
+  }
+
+  function formatDate(value) {
+    try { return new Date(value).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }); }
+    catch (_) { return ''; }
+  }
+
+  function renderCustomComponents() {
+    const list = $('customComponentList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!state.components.length) {
+      list.innerHTML = '<div class="component-empty">No custom components in this folder yet.</div>';
+      return;
+    }
+    state.components.forEach(component => {
+      const row = document.createElement('article');
+      row.className = 'custom-component-card';
+      row.innerHTML = `<div class="custom-component-glyph">◇</div><div class="custom-component-copy"><strong>${escapeHtml(component.name)}</strong><small>${escapeHtml(formatDate(component.updatedAt))}</small></div><div class="custom-component-actions"><button type="button" class="button secondary mini-button" data-action="insert">Add</button><button type="button" class="icon-btn compact-icon-btn" data-action="delete" title="Delete component">×</button></div>`;
+      row.querySelector('[data-action="insert"]').addEventListener('click', () => insertSavedComponent(component));
+      row.querySelector('[data-action="delete"]').addEventListener('click', () => deleteSavedComponent(component));
+      list.appendChild(row);
+    });
+  }
+
+  async function insertSavedComponent(component) {
+    try {
+      plus.toast('Loading ' + component.name + '…');
+      const loaded = await rpc('htmlStudioLoadComponent', component.id);
+      plus.insertHtml(String(loaded.html || ''), insertionPosition(), { message: component.name + ' added.' });
+    } catch (error) {
+      plus.toast('Could not load that component from Drive.', 'error');
+    }
+  }
+
+  async function deleteSavedComponent(component) {
+    if (!window.confirm('Delete “' + component.name + '” from your component library?')) return;
+    try {
+      await rpc('htmlStudioDeleteComponent', component.id);
+      plus.toast('Component deleted.');
+      await loadFolders(false);
+    } catch (error) {
+      plus.toast('Component could not be deleted.', 'error');
+    }
+  }
+
+  function openSaveModal() {
+    const html = selectedOuterHtml();
+    if (!html) return plus.toast('Select the element, frame, or section you want to save first.', 'error');
+    const name = $('saveComponentNameInput');
+    if (name) name.value = suggestedName();
+    syncFolderSelects();
+    const modal = $('saveComponentModal');
+    if (modal) modal.classList.remove('hidden');
+  }
+
+  function closeModal(id) {
+    const modal = $(id);
+    if (modal) modal.classList.add('hidden');
+  }
+
+  async function saveSelected() {
+    const html = selectedOuterHtml();
+    if (!html) return plus.toast('The selected element could not be read from the page source.', 'error');
+    const name = String($('saveComponentNameInput')?.value || '').trim();
+    const folderId = $('saveComponentFolderInput')?.value || state.folderId;
+    if (!name) return plus.toast('Enter a component name.', 'error');
+    if (!folderId) return plus.toast('Choose a component folder.', 'error');
+    const button = $('confirmSaveComponentBtn');
+    if (button) { button.disabled = true; button.textContent = 'Saving…'; }
+    try {
+      await rpc('htmlStudioSaveComponent', { name, folderId, html });
+      closeModal('saveComponentModal');
+      plus.toast('Component saved to Google Drive.');
+      state.folderId = folderId;
+      await loadFolders(false);
+    } catch (error) {
+      console.error('[HTML Studio] component save failed:', error);
+      plus.toast(String(error && error.message || 'Component could not be saved.'), 'error');
+    } finally {
+      if (button) { button.disabled = false; button.textContent = 'Save to Drive'; }
+    }
+  }
+
+  async function createFolder() {
+    const input = $('newComponentFolderNameInput');
+    const name = String(input?.value || '').trim();
+    if (!name) return plus.toast('Enter a folder name.', 'error');
+    const button = $('confirmComponentFolderBtn');
+    if (button) { button.disabled = true; button.textContent = 'Creating…'; }
+    try {
+      const folder = await rpc('htmlStudioCreateComponentFolder', name);
+      closeModal('newComponentFolderModal');
+      if (input) input.value = '';
+      plus.toast('Component folder created.');
+      await loadFolders(false);
+      state.folderId = folder.id;
+      syncFolderSelects();
+      if ($('componentFolderInput')) $('componentFolderInput').value = folder.id;
+      await loadCustomComponents();
+    } catch (error) {
+      plus.toast(String(error && error.message || 'Folder could not be created.'), 'error');
+    } finally {
+      if (button) { button.disabled = false; button.textContent = 'Create folder'; }
+    }
+  }
+
+  function bind() {
+    injectUi();
+    renderCategories();
+    renderBuiltIns('All');
+    $('elementsModeBtn')?.addEventListener('click', () => setMode('elements'));
+    $('componentsModeBtn')?.addEventListener('click', () => setMode('components'));
+    $('componentSearchInput')?.addEventListener('input', event => {
+      state.search = event.target.value;
+      const active = $('componentCategoryRow')?.querySelector('.component-category.active');
+      renderBuiltIns(active ? active.textContent : 'All');
+    });
+    $('componentFolderInput')?.addEventListener('change', event => { state.folderId = event.target.value; loadCustomComponents(); });
+    $('refreshComponentsBtn')?.addEventListener('click', () => loadFolders(true));
+    $('saveSelectedComponentBtn')?.addEventListener('click', openSaveModal);
+    $('newComponentFolderBtn')?.addEventListener('click', () => $('newComponentFolderModal')?.classList.remove('hidden'));
+    $('closeSaveComponentModalBtn')?.addEventListener('click', () => closeModal('saveComponentModal'));
+    $('cancelSaveComponentBtn')?.addEventListener('click', () => closeModal('saveComponentModal'));
+    $('confirmSaveComponentBtn')?.addEventListener('click', saveSelected);
+    $('closeComponentFolderModalBtn')?.addEventListener('click', () => closeModal('newComponentFolderModal'));
+    $('cancelComponentFolderBtn')?.addEventListener('click', () => closeModal('newComponentFolderModal'));
+    $('confirmComponentFolderBtn')?.addEventListener('click', createFolder);
+    ['saveComponentModal','newComponentFolderModal'].forEach(id => $(id)?.addEventListener('click', event => { if (event.target === $(id)) closeModal(id); }));
+    setStatus('ready');
+  }
+
+  try { bind(); }
+  catch (error) {
+    console.error('[HTML Studio] Components module failed:', error);
+    setStatus('error');
+    plus.toast('Components library could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

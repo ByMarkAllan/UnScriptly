@@ -1,0 +1,408 @@
+<script>
+(() => {
+  'use strict';
+
+  const plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  let media = [];                // Metadata only. Media bytes persist only in Google Drive.
+  let folders = [];
+  let activeFolderId = '';
+  let busy = false;
+
+  function $(id) { return document.getElementById(id); }
+  function setStatus(value) { document.documentElement.setAttribute('data-html-studio-media', value); }
+  function escapeAttr(value) { return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  function rpc(method, payload) {
+    if (!(window.google && google.script && google.script.run)) {
+      return Promise.reject(new Error('Persistent Media Library requires the deployed Google Apps Script web app.'));
+    }
+    return new Promise((resolve, reject) => {
+      const runner = google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(error => reject(error instanceof Error ? error : new Error(String(error && error.message || error || 'Drive operation failed.'))));
+      if (payload === undefined) runner[method]();
+      else runner[method](payload);
+    });
+  }
+
+  function setOperationStatus(message, type) {
+    const node = $('mediaOperationStatus');
+    if (!node) return;
+    node.textContent = message || '';
+    node.className = 'field-help media-operation-status' + (type ? ' ' + type : '');
+  }
+
+  function setBusy(value, message) {
+    busy = Boolean(value);
+    ['mediaFileInput','addMediaUrlBtn','mediaUrlInput','mediaUrlKindInput','mediaFolderInput','createMediaFolderBtn','refreshMediaLibraryBtn'].forEach(id => {
+      const node = $(id);
+      if (node) node.disabled = busy;
+    });
+    if (message) setOperationStatus(message, busy ? 'busy' : '');
+  }
+
+  function formatBytes(bytes) {
+    const value = Number(bytes || 0);
+    if (!value) return '0 B';
+    if (value < 1024) return value + ' B';
+    if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB';
+    return (value / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function mediaKindForFile(file) {
+    const type = String((file && file.type) || '').toLowerCase();
+    const name = String((file && file.name) || '').toLowerCase();
+    if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'image';
+    if (type.startsWith('video/') || /\.(mp4|webm|mov|m4v|ogv)$/i.test(name)) return 'video';
+    if (type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(name)) return 'audio';
+    return '';
+  }
+
+  function readFileBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const value = String(reader.result || '');
+        resolve(value.indexOf(',') >= 0 ? value.split(',')[1] : value);
+      };
+      reader.onerror = () => reject(reader.error || new Error('Media file could not be read.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function currentFolder() { return folders.find(folder => folder.id === activeFolderId) || null; }
+
+  function renderFolders() {
+    const select = $('mediaFolderInput');
+    if (!select) return;
+    const current = activeFolderId;
+    select.innerHTML = '';
+    folders.forEach(folder => {
+      const option = document.createElement('option');
+      option.value = folder.id;
+      option.textContent = folder.name + (Number(folder.mediaCount || 0) ? ' · ' + folder.mediaCount : '');
+      select.appendChild(option);
+    });
+    if (folders.some(folder => folder.id === current)) select.value = current;
+    else if (folders.length) { activeFolderId = folders[0].id; select.value = activeFolderId; }
+  }
+
+  function applyBootstrap(result) {
+    result = result || {};
+    folders = Array.isArray(result.folders) ? result.folders : [];
+    activeFolderId = String(result.activeFolderId || (folders[0] && folders[0].id) || '');
+    media = Array.isArray(result.assets) ? result.assets : [];
+    renderFolders();
+    renderMediaLibrary();
+
+    const storage = result.storage || {};
+    const summary = $('mediaStorageSummary');
+    if (summary) {
+      summary.textContent = 'Shared across all projects · ' + folders.length + ' folder' + (folders.length === 1 ? '' : 's') + ' · files persist in Google Drive only.';
+    }
+    const drive = $('openMediaDriveBtn');
+    if (drive) {
+      if (storage.driveUrl) { drive.href = storage.driveUrl; drive.classList.remove('hidden'); }
+      else { drive.classList.add('hidden'); drive.removeAttribute('href'); }
+    }
+  }
+
+  async function loadLibrary(folderId, silent) {
+    if (busy) return;
+    if (!silent) setBusy(true, 'Loading Drive media…');
+    try {
+      const result = await rpc('htmlStudioGetMediaLibrary', folderId || '');
+      applyBootstrap(result);
+      if (!silent) setOperationStatus('Media library synced from Google Drive.', 'success');
+    } catch (error) {
+      console.error('[HTML Studio] Drive media load failed:', error);
+      setOperationStatus(String(error && error.message || error || 'Could not load Drive media.'), 'error');
+      plus.toast('Could not load the Google Drive Media Library.', 'error');
+    } finally {
+      if (!silent) setBusy(false);
+    }
+  }
+
+  async function importMediaFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length || busy) return;
+    const supported = files.filter(file => mediaKindForFile(file));
+    if (!supported.length) { plus.toast('Choose image, SVG, video, or audio files.', 'error'); return; }
+
+    const maxBytes = 25 * 1024 * 1024;
+    setBusy(true, 'Preparing media for Google Drive…');
+    let saved = 0;
+    try {
+      for (let i = 0; i < supported.length; i++) {
+        const file = supported[i];
+        if (file.size > maxBytes) {
+          plus.toast(file.name + ' is over 25 MB. Save it from a hosted URL or choose a smaller file.', 'error');
+          continue;
+        }
+        setOperationStatus('Uploading ' + (i + 1) + ' of ' + supported.length + ': ' + file.name, 'busy');
+        const base64 = await readFileBase64(file);
+        await rpc('htmlStudioSaveMediaFile', {
+          folderId: activeFolderId,
+          name: file.name,
+          mimeType: file.type || '',
+          kind: mediaKindForFile(file),
+          base64: base64
+        });
+        saved++;
+        // Drop the transient base64 string before moving to the next file.
+      }
+      const result = await rpc('htmlStudioGetMediaLibrary', activeFolderId || '');
+      applyBootstrap(result);
+      setOperationStatus(saved + ' media file' + (saved === 1 ? '' : 's') + ' saved to Google Drive.', 'success');
+      if (saved) plus.toast(saved + ' media file' + (saved === 1 ? '' : 's') + ' saved to Drive.');
+    } catch (error) {
+      console.error('[HTML Studio] Media upload failed:', error);
+      setOperationStatus(String(error && error.message || error || 'Media upload failed.'), 'error');
+      plus.toast('Media upload to Google Drive failed.', 'error');
+    } finally {
+      const input = $('mediaFileInput');
+      if (input) input.value = '';
+      setBusy(false);
+    }
+  }
+
+  async function addMediaFromUrl() {
+    if (busy) return;
+    const kindInput = $('mediaUrlKindInput');
+    const urlInput = $('mediaUrlInput');
+    if (!kindInput || !urlInput) return;
+    const url = String(urlInput.value || '').trim();
+    if (!/^https?:\/\//i.test(url)) { plus.toast('Enter a valid HTTPS media URL.', 'error'); return; }
+
+    setBusy(true, 'Downloading hosted media into Google Drive…');
+    try {
+      await rpc('htmlStudioSaveMediaUrl', { folderId: activeFolderId, url: url, kind: kindInput.value || 'image' });
+      urlInput.value = '';
+      const result = await rpc('htmlStudioGetMediaLibrary', activeFolderId || '');
+      applyBootstrap(result);
+      setOperationStatus('Hosted media copied into Google Drive.', 'success');
+      plus.toast('Hosted media saved to Drive.');
+    } catch (error) {
+      console.error('[HTML Studio] Hosted media save failed:', error);
+      setOperationStatus(String(error && error.message || error || 'Could not save hosted media.'), 'error');
+      plus.toast('Could not save the hosted media to Drive.', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createFolder() {
+    if (busy) return;
+    const name = window.prompt('Name this media folder:');
+    if (name === null) return;
+    const cleaned = String(name || '').trim();
+    if (!cleaned) { plus.toast('Enter a folder name.', 'error'); return; }
+    setBusy(true, 'Creating Drive folder…');
+    try {
+      const folder = await rpc('htmlStudioCreateMediaFolder', cleaned);
+      const result = await rpc('htmlStudioGetMediaLibrary', folder.id);
+      applyBootstrap(result);
+      setOperationStatus('Folder created in Google Drive.', 'success');
+      plus.toast('Media folder created.');
+    } catch (error) {
+      console.error('[HTML Studio] Media folder create failed:', error);
+      setOperationStatus(String(error && error.message || error || 'Could not create media folder.'), 'error');
+      plus.toast('Could not create the media folder.', 'error');
+    } finally { setBusy(false); }
+  }
+
+  function mediaMarkup(asset) {
+    const src = escapeAttr(asset.url);
+    if (asset.kind === 'video') return '<video src="' + src + '" controls preload="metadata" style="display:block;width:min(800px,100%);border-radius:12px;"></video>';
+    if (asset.kind === 'audio') return '<audio src="' + src + '" controls preload="metadata" style="display:block;width:min(620px,100%);"></audio>';
+    return '<img src="' + src + '" alt="' + escapeAttr(asset.name || 'Image') + '" style="display:block;max-width:100%;height:auto;">';
+  }
+
+  function useMediaAsset(asset) {
+    const selected = plus.getSelection();
+    const selectedTag = selected ? selected.tag : '';
+    if ((asset.kind === 'image' && selectedTag === 'img') ||
+        (asset.kind === 'video' && selectedTag === 'video') ||
+        (asset.kind === 'audio' && selectedTag === 'audio')) {
+      plus.attrSelected('src', asset.url, { message: 'Drive media linked.' });
+      if (asset.kind === 'image' && selected && !(selected.attrs && selected.attrs.alt)) plus.attrSelected('alt', asset.name || 'Image', { message: 'Alt text added.' });
+      return;
+    }
+    const positionInput = $('insertPositionInput');
+    plus.insertHtml(mediaMarkup(asset), positionInput ? positionInput.value : 'smart', { message: 'Drive media added.' });
+  }
+
+  async function deleteAsset(asset) {
+    if (!asset || busy) return;
+    if (!window.confirm('Delete “' + (asset.name || 'this media file') + '” from the shared Google Drive Media Library?')) return;
+    setBusy(true, 'Deleting media from Google Drive…');
+    try {
+      await rpc('htmlStudioDeleteMedia', asset.id);
+      const result = await rpc('htmlStudioGetMediaLibrary', activeFolderId || '');
+      applyBootstrap(result);
+      setOperationStatus('Media deleted from Google Drive.', 'success');
+      plus.toast('Media deleted from Drive.');
+    } catch (error) {
+      setOperationStatus(String(error && error.message || error || 'Could not delete media.'), 'error');
+      plus.toast('Could not delete the Drive media file.', 'error');
+    } finally { setBusy(false); }
+  }
+
+  function notifyMediaChanged() {
+    try { document.dispatchEvent(new CustomEvent('htmlstudio:media-changed', { detail: { assets: media.length, folderId: activeFolderId } })); } catch (_) {}
+  }
+
+  function renderMediaLibrary() {
+    const grid = $('mediaGrid');
+    const summary = $('mediaLibrarySummary');
+    if (!grid || !summary) return;
+    grid.innerHTML = '';
+    const count = media.length;
+    const folder = currentFolder();
+    summary.textContent = count
+      ? count + ' Drive item' + (count === 1 ? '' : 's') + ' in ' + (folder ? folder.name : 'Media') + ' · Use inserts a Drive-backed reference.'
+      : 'No media in ' + (folder ? folder.name : 'this folder') + ' yet.';
+
+    if (!count) {
+      const empty = document.createElement('div');
+      empty.className = 'issue-card good';
+      empty.style.gridColumn = '1 / -1';
+      empty.innerHTML = '<span class="issue-dot"></span><div class="issue-text">Upload a file or save a hosted URL to this Google Drive folder.</div>';
+      grid.appendChild(empty);
+      notifyMediaChanged();
+      return;
+    }
+
+    media.forEach(asset => {
+      const card = document.createElement('article');
+      card.className = 'media-card';
+      const thumb = document.createElement('div');
+      thumb.className = 'media-thumb';
+      if (asset.kind === 'image') {
+        const img = document.createElement('img');
+        img.src = asset.thumbnailUrl || asset.url;
+        img.alt = '';
+        img.loading = 'lazy';
+        img.referrerPolicy = 'no-referrer';
+        thumb.appendChild(img);
+      } else {
+        const glyph = document.createElement('span');
+        glyph.className = 'media-kind-glyph';
+        glyph.textContent = asset.kind === 'video' ? '▶' : '♫';
+        thumb.appendChild(glyph);
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'media-card-meta';
+      const name = document.createElement('span');
+      name.className = 'media-card-name';
+      name.textContent = asset.name || 'Media';
+      name.title = asset.name || 'Media';
+      const size = document.createElement('span');
+      size.className = 'media-card-size';
+      size.textContent = asset.kind + ' · ' + formatBytes(asset.size);
+      meta.append(name, size);
+
+      const actions = document.createElement('div');
+      actions.className = 'media-card-actions';
+      const useBtn = document.createElement('button');
+      useBtn.type = 'button';
+      useBtn.textContent = 'Use';
+      useBtn.addEventListener('click', event => { event.stopPropagation(); useMediaAsset(asset); });
+      const driveLink = document.createElement('a');
+      driveLink.className = 'media-drive-link';
+      driveLink.href = asset.driveUrl || '#';
+      driveLink.target = '_blank';
+      driveLink.rel = 'noopener';
+      driveLink.title = 'Open file in Google Drive';
+      driveLink.textContent = '↗';
+      driveLink.addEventListener('click', event => event.stopPropagation());
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'media-remove';
+      removeBtn.title = 'Delete from Google Drive Media Library';
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', event => { event.stopPropagation(); deleteAsset(asset); });
+      actions.append(useBtn, driveLink, removeBtn);
+      card.append(thumb, meta, actions);
+      card.addEventListener('dblclick', () => useMediaAsset(asset));
+      grid.appendChild(card);
+    });
+    notifyMediaChanged();
+  }
+
+  function updateSelectionControls(selected) {
+    const controls = $('mediaElementControls');
+    const srcInput = $('mediaSrcInput');
+    if (!controls || !srcInput) return;
+    const isMedia = Boolean(selected && (selected.tag === 'video' || selected.tag === 'audio'));
+    controls.classList.toggle('hidden', !isMedia);
+    if (!isMedia) return;
+    const attrs = selected.attrs || {};
+    srcInput.value = attrs.src || '';
+    [['mediaControlsInput','controls'],['mediaLoopInput','loop'],['mediaAutoplayInput','autoplay'],['mediaMutedInput','muted']].forEach(pair => {
+      const input = $(pair[0]); if (input) input.checked = Boolean(attrs[pair[1]]);
+    });
+  }
+
+  function bindMediaInspector() {
+    const srcInput = $('mediaSrcInput');
+    if (srcInput) srcInput.addEventListener('change', () => plus.attrSelected('src', srcInput.value, { message: 'Media source updated.' }));
+    [['mediaControlsInput','controls'],['mediaLoopInput','loop'],['mediaAutoplayInput','autoplay'],['mediaMutedInput','muted']].forEach(pair => {
+      const input = $(pair[0]);
+      if (input) input.addEventListener('change', () => plus.attrSelected(pair[1], input.checked ? true : false, { message: 'Media setting updated.' }));
+    });
+  }
+
+  function publicAsset(asset) {
+    return asset ? {
+      id: asset.id, kind: asset.kind, name: asset.name, size: asset.size,
+      url: asset.url, thumbnailUrl: asset.thumbnailUrl || '', driveUrl: asset.driveUrl || '',
+      folderId: asset.folderId || '', folderName: asset.folderName || '', mimeType: asset.mimeType || ''
+    } : null;
+  }
+
+  window.HTMLStudioMedia = {
+    getAssets: () => media.map(publicAsset),
+    getImageAssets: () => media.filter(item => item.kind === 'image').map(publicAsset),
+    getFolders: () => folders.map(folder => Object.assign({}, folder)),
+    refresh: () => loadLibrary(activeFolderId || '', true),
+    useAsset: id => {
+      const asset = media.find(item => item.id === id);
+      if (!asset) return false;
+      useMediaAsset(asset);
+      return true;
+    }
+  };
+
+  function init() {
+    const fileInput = $('mediaFileInput');
+    const addUrlBtn = $('addMediaUrlBtn');
+    const urlInput = $('mediaUrlInput');
+    const folderInput = $('mediaFolderInput');
+    const createFolderBtn = $('createMediaFolderBtn');
+    const refreshBtn = $('refreshMediaLibraryBtn');
+
+    if (fileInput) fileInput.addEventListener('change', event => importMediaFiles(event.target.files));
+    if (addUrlBtn) addUrlBtn.addEventListener('click', addMediaFromUrl);
+    if (urlInput) urlInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addMediaFromUrl(); } });
+    if (folderInput) folderInput.addEventListener('change', () => { activeFolderId = folderInput.value || ''; loadLibrary(activeFolderId); });
+    if (createFolderBtn) createFolderBtn.addEventListener('click', createFolder);
+    if (refreshBtn) refreshBtn.addEventListener('click', () => loadLibrary(activeFolderId));
+
+    bindMediaInspector();
+    document.addEventListener('htmlstudio:plus-selection', event => updateSelectionControls(event.detail || null));
+    setStatus('ready');
+    loadLibrary('', false);
+  }
+
+  try { init(); }
+  catch (error) {
+    console.error('[HTML Studio] Media module failed:', error);
+    setStatus('error');
+    plus.toast('Google Drive Media Library could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

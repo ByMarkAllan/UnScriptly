@@ -1,0 +1,137 @@
+<script>
+(function () {
+  'use strict';
+  var frame = document.getElementById('previewFrame');
+  var root = document.documentElement;
+  var MARKER = '__unscriptly_layer_sync_bridge__';
+
+  function setStatus(value) { root.setAttribute('data-html-studio-layer-bridge', value); }
+
+  function previewLayerSyncBridge() {
+    var SOURCE = 'unscriptly-html-studio';
+    var hoverSheet = null;
+    var fallbackTarget = null;
+    var fallbackStyle = null;
+
+    function post(type, payload) { parent.postMessage(Object.assign({ source: SOURCE, type: type }, payload || {}), '*'); }
+    function pathKey(parts) { return parts && parts.length ? parts.join('.') : 'body'; }
+    function structuralPath(el) {
+      if (!el || !document.body) return '';
+      if (el === document.body) return 'body';
+      var parts = [], cursor = el;
+      while (cursor && cursor !== document.body) {
+        var parentEl = cursor.parentElement;
+        if (!parentEl) return '';
+        var index = Array.prototype.indexOf.call(parentEl.children, cursor);
+        if (index < 0) return '';
+        parts.unshift(index); cursor = parentEl;
+      }
+      return cursor === document.body ? pathKey(parts) : '';
+    }
+    function pathArray(value) {
+      if (!value || value === 'body') return [];
+      return String(value).split('.').filter(Boolean).map(function (part) { return parseInt(part, 10); });
+    }
+    function resolvePath(value) {
+      var node = document.body, parts = pathArray(value);
+      for (var i = 0; i < parts.length; i++) {
+        if (!node || !node.children || !node.children[parts[i]]) return null;
+        node = node.children[parts[i]];
+      }
+      return node;
+    }
+    function cssEscape(value) {
+      if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value));
+      return String(value).replace(/([\\"'])/g, '\\$1');
+    }
+    function ensureSheet() {
+      if (hoverSheet) return hoverSheet;
+      try {
+        if (window.CSSStyleSheet && 'adoptedStyleSheets' in document) {
+          hoverSheet = new CSSStyleSheet();
+          hoverSheet.replaceSync('');
+          document.adoptedStyleSheets = Array.prototype.slice.call(document.adoptedStyleSheets || []).concat([hoverSheet]);
+        }
+      } catch (_) { hoverSheet = null; }
+      return hoverSheet;
+    }
+    function clearFallback() {
+      if (!fallbackTarget || !fallbackStyle) return;
+      fallbackTarget.style.outline = fallbackStyle.outline;
+      fallbackTarget.style.outlineOffset = fallbackStyle.outlineOffset;
+      fallbackTarget.style.boxShadow = fallbackStyle.boxShadow;
+      fallbackTarget = null; fallbackStyle = null;
+    }
+    function clearHover() {
+      if (hoverSheet) { try { hoverSheet.replaceSync(''); } catch (_) {} }
+      clearFallback();
+    }
+    function setHover(path) {
+      clearHover();
+      var target = resolvePath(path);
+      if (!target) return;
+      var editorId = target.getAttribute('data-unscriptly-editor-id');
+      var sheet = ensureSheet();
+      if (sheet && editorId) {
+        var selector = '[data-unscriptly-editor-id="' + cssEscape(editorId) + '"]';
+        sheet.replaceSync(selector + '{outline:2px dashed rgba(17,17,17,.88)!important;outline-offset:4px!important;box-shadow:0 0 0 3px rgba(255,255,255,.72),0 0 0 5px rgba(17,17,17,.18)!important;}');
+        return;
+      }
+      fallbackTarget = target;
+      fallbackStyle = { outline: target.style.outline, outlineOffset: target.style.outlineOffset, boxShadow: target.style.boxShadow };
+      target.style.outline = '2px dashed rgba(17,17,17,.88)';
+      target.style.outlineOffset = '4px';
+      target.style.boxShadow = '0 0 0 3px rgba(255,255,255,.72),0 0 0 5px rgba(17,17,17,.18)';
+    }
+
+    window.addEventListener('message', function (event) {
+      var msg = event.data || {};
+      if (msg.source !== SOURCE) return;
+      if (msg.type === 'NCE_LAYER_HOVER_PATH') return setHover(msg.path || '');
+      if (msg.type === 'NCE_LAYER_HOVER_CLEAR') return clearHover();
+      if (msg.type === 'NCE_LAYER_REVEAL_PATH') {
+        var target = resolvePath(msg.path || '');
+        if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      }
+    });
+
+    document.addEventListener('click', function (event) {
+      var target = event.target && event.target.closest ? event.target.closest('[data-unscriptly-editor-id]') : null;
+      if (!target || !document.body.contains(target)) return;
+      var path = structuralPath(target);
+      if (path) post('NCE_LAYER_SELECTED_PATH', { path: path });
+    }, true);
+    window.addEventListener('blur', clearHover);
+    post('NCE_LAYER_BRIDGE_READY');
+
+    /* Keep synchronization preview-only. Removing the loader script prevents
+       the core serializer from ever copying this bridge into exported HTML. */
+    try {
+      var loader = document.currentScript;
+      if (loader && loader.parentNode) loader.parentNode.removeChild(loader);
+    } catch (_) {}
+  }
+
+  try {
+    if (!frame || !window.HTMLIFrameElement) throw new Error('Preview iframe is unavailable.');
+    var descriptor = Object.getOwnPropertyDescriptor(window.HTMLIFrameElement.prototype, 'srcdoc');
+    if (!descriptor || typeof descriptor.get !== 'function' || typeof descriptor.set !== 'function') throw new Error('This browser does not expose the iframe srcdoc accessor.');
+    function injectBridge(html) {
+      var text = String(html == null ? '' : html);
+      if (text.indexOf(MARKER) >= 0) return text;
+      var payload = '<script id="' + MARKER + '">(' + previewLayerSyncBridge.toString() + ')();<\/script>';
+      var index = text.toLowerCase().lastIndexOf('</body>');
+      return index >= 0 ? text.slice(0, index) + payload + text.slice(index) : text + payload;
+    }
+    Object.defineProperty(frame, 'srcdoc', {
+      configurable: true, enumerable: true,
+      get: function () { return descriptor.get.call(frame); },
+      set: function (value) { descriptor.set.call(frame, injectBridge(value)); }
+    });
+    setStatus('ready');
+  } catch (error) {
+    console.error('[HTML Studio] Layer preview bridge failed:', error);
+    setStatus('error');
+  }
+})();
+</script>

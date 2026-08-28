@@ -1,0 +1,250 @@
+<script>
+(() => {
+  'use strict';
+
+  const plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  let selectedIds = [];
+  let mode = 'gallery';
+  const $ = id => document.getElementById(id);
+  const setStatus = value => document.documentElement.setAttribute('data-html-studio-gallery', value);
+
+  function escapeAttr(value) {
+    return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function imageAssets() {
+    return window.HTMLStudioMedia && typeof window.HTMLStudioMedia.getImageAssets === 'function'
+      ? window.HTMLStudioMedia.getImageAssets()
+      : [];
+  }
+
+  function injectBuilder() {
+    const view = $('mediaLibraryView');
+    if (!view || $('mediaCompositionBuilder')) return;
+    const section = document.createElement('section');
+    section.className = 'gallery-builder media-composition-builder';
+    section.id = 'mediaCompositionBuilder';
+    section.innerHTML = `
+      <div class="gallery-builder-head">
+        <div>
+          <div class="element-group-title">Gallery &amp; Slideshow</div>
+          <div class="field-help">Turn Media Library images into a responsive gallery or interactive slideshow.</div>
+        </div>
+        <span class="gallery-selection-count" id="gallerySelectionCount">0 selected</span>
+      </div>
+      <div class="media-composition-switch" role="group" aria-label="Media composition type">
+        <button id="galleryModeBtn" class="active" type="button">Gallery</button>
+        <button id="slideshowModeBtn" type="button">Slideshow</button>
+      </div>
+      <div class="gallery-picker-grid" id="galleryPickerGrid"></div>
+
+      <div id="galleryOptions" class="gallery-options">
+        <div class="field-grid two">
+          <div><label class="field-label" for="galleryLayoutInput">Layout</label><select id="galleryLayoutInput" class="field"><option value="grid">Grid</option><option value="masonry">Masonry</option><option value="filmstrip">Filmstrip</option></select></div>
+          <div><label class="field-label" for="galleryColumnsInput">Columns</label><select id="galleryColumnsInput" class="field"><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></div>
+        </div>
+        <div class="field-grid two">
+          <div><label class="field-label" for="galleryGapInput">Gap</label><select id="galleryGapInput" class="field"><option value="4">4 px</option><option value="8">8 px</option><option value="12" selected>12 px</option><option value="16">16 px</option><option value="24">24 px</option><option value="32">32 px</option></select></div>
+          <div><label class="field-label" for="galleryRatioInput">Image ratio</label><select id="galleryRatioInput" class="field"><option value="4 / 3">Landscape 4:3</option><option value="1 / 1">Square 1:1</option><option value="3 / 4">Portrait 3:4</option><option value="auto" selected>Original</option></select></div>
+        </div>
+        <label class="check-row"><input id="galleryCaptionsInput" type="checkbox"> Show filenames as captions</label>
+        <label class="check-row"><input id="galleryLightboxInput" type="checkbox" checked> Open images in a lightbox</label>
+        <button id="insertGalleryBtn" class="button primary gallery-insert-btn" type="button">Add photo gallery</button>
+      </div>
+
+      <div id="slideshowOptions" class="gallery-options slideshow-options hidden">
+        <div class="field-grid two">
+          <div><label class="field-label" for="slideshowTransitionInput">Transition</label><select id="slideshowTransitionInput" class="field"><option value="fade">Fade</option><option value="slide">Slide</option></select></div>
+          <div><label class="field-label" for="slideshowRatioInput">Frame ratio</label><select id="slideshowRatioInput" class="field"><option value="16 / 9" selected>Widescreen 16:9</option><option value="4 / 3">Landscape 4:3</option><option value="1 / 1">Square 1:1</option><option value="3 / 4">Portrait 3:4</option></select></div>
+        </div>
+        <div class="field-grid two">
+          <div><label class="field-label" for="slideshowIntervalInput">Autoplay interval</label><select id="slideshowIntervalInput" class="field"><option value="3000">3 seconds</option><option value="5000" selected>5 seconds</option><option value="7000">7 seconds</option><option value="10000">10 seconds</option></select></div>
+          <div><label class="field-label" for="slideshowFitInput">Image fit</label><select id="slideshowFitInput" class="field"><option value="cover" selected>Crop / Cover</option><option value="contain">Contain</option></select></div>
+        </div>
+        <div class="slideshow-check-grid">
+          <label class="check-row"><input id="slideshowAutoplayInput" type="checkbox" checked> Autoplay</label>
+          <label class="check-row"><input id="slideshowLoopInput" type="checkbox" checked> Loop</label>
+          <label class="check-row"><input id="slideshowArrowsInput" type="checkbox" checked> Navigation arrows</label>
+          <label class="check-row"><input id="slideshowDotsInput" type="checkbox" checked> Pagination dots</label>
+          <label class="check-row"><input id="slideshowCaptionsInput" type="checkbox"> Show filenames as captions</label>
+        </div>
+        <button id="insertSlideshowBtn" class="button primary gallery-insert-btn" type="button">Add slideshow</button>
+      </div>`;
+    view.appendChild(section);
+  }
+
+  function setMode(next) {
+    mode = next === 'slideshow' ? 'slideshow' : 'gallery';
+    $('galleryModeBtn')?.classList.toggle('active', mode === 'gallery');
+    $('slideshowModeBtn')?.classList.toggle('active', mode === 'slideshow');
+    $('galleryOptions')?.classList.toggle('hidden', mode !== 'gallery');
+    $('slideshowOptions')?.classList.toggle('hidden', mode !== 'slideshow');
+  }
+
+  function renderPicker() {
+    const grid = $('galleryPickerGrid');
+    const count = $('gallerySelectionCount');
+    if (!grid) return;
+    const assets = imageAssets();
+    selectedIds = selectedIds.filter(id => assets.some(asset => asset.id === id));
+    if (count) count.textContent = selectedIds.length + ' selected';
+    grid.innerHTML = '';
+    if (!assets.length) {
+      const empty = document.createElement('div');
+      empty.className = 'gallery-picker-empty';
+      empty.textContent = 'Upload images above, then select them here to build a gallery or slideshow.';
+      grid.appendChild(empty);
+      return;
+    }
+    assets.forEach(asset => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'gallery-picker-item' + (selectedIds.includes(asset.id) ? ' selected' : '');
+      button.setAttribute('aria-pressed', selectedIds.includes(asset.id) ? 'true' : 'false');
+      button.innerHTML = `<span class="gallery-picker-thumb"><img src="${escapeAttr(asset.url)}" alt=""></span><span class="gallery-picker-name">${escapeAttr(asset.name || 'Image')}</span><span class="gallery-picker-check">✓</span>`;
+      button.addEventListener('click', () => {
+        const index = selectedIds.indexOf(asset.id);
+        if (index >= 0) selectedIds.splice(index, 1); else selectedIds.push(asset.id);
+        renderPicker();
+      });
+      grid.appendChild(button);
+    });
+  }
+
+  function galleryMarkup(assets, opts) {
+    const id = 'unscriptly-gallery-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    const layout = opts.layout;
+    const columns = Math.max(2, Math.min(6, Number(opts.columns || 3)));
+    const gap = Math.max(0, Number(opts.gap || 12));
+    const ratio = opts.ratio === 'auto' ? 'auto' : opts.ratio;
+
+    let wrapperStyle = 'width:100%;margin:24px 0;';
+    if (layout === 'grid') wrapperStyle += `display:grid;grid-template-columns:repeat(${columns},minmax(0,1fr));gap:${gap}px;`;
+    if (layout === 'masonry') wrapperStyle += `columns:${columns};column-gap:${gap}px;`;
+    if (layout === 'filmstrip') wrapperStyle += `display:flex;gap:${gap}px;overflow-x:auto;scroll-snap-type:x proximity;padding-bottom:8px;`;
+
+    const items = assets.map((asset, index) => {
+      const imageStyle = ratio === 'auto' ? 'display:block;width:100%;height:auto;' : `display:block;width:100%;aspect-ratio:${ratio};height:auto;object-fit:cover;`;
+      const itemStyle = layout === 'masonry' ? `break-inside:avoid;margin:0 0 ${gap}px;` : layout === 'filmstrip' ? 'flex:0 0 min(78vw,520px);scroll-snap-align:start;' : 'margin:0;min-width:0;';
+      const caption = opts.captions ? `<figcaption style="margin-top:8px;font:500 12px/1.45 Arial,sans-serif;color:#666;">${escapeAttr(asset.name || 'Image')}</figcaption>` : '';
+      const image = `<img src="${escapeAttr(asset.url)}" alt="${escapeAttr(asset.name || 'Gallery image ' + (index + 1))}" loading="lazy" style="${imageStyle}">`;
+      const media = opts.lightbox ? `<button type="button" data-unscriptly-gallery-open="${index}" aria-label="Open ${escapeAttr(asset.name || 'image')}" style="display:block;width:100%;padding:0;border:0;background:transparent;cursor:zoom-in;text-align:inherit;">${image}</button>` : image;
+      return `<figure class="unscriptly-gallery-item" style="${itemStyle}">${media}${caption}</figure>`;
+    }).join('');
+
+    let lightbox = '';
+    if (opts.lightbox) {
+      const imageData = JSON.stringify(assets.map(asset => ({ src: asset.url, alt: asset.name || 'Gallery image' }))).replace(/</g, '\\u003c');
+      lightbox = `
+<dialog id="${id}-lightbox" data-unscriptly-gallery-dialog style="padding:0;border:0;border-radius:14px;background:#111;max-width:min(94vw,1200px);max-height:92vh;box-shadow:0 28px 90px rgba(0,0,0,.45);">
+  <button type="button" data-unscriptly-gallery-close aria-label="Close gallery" style="position:absolute;right:12px;top:12px;z-index:2;width:38px;height:38px;border-radius:999px;border:1px solid rgba(255,255,255,.25);background:rgba(0,0,0,.55);color:white;font-size:24px;cursor:pointer;">×</button>
+  <img data-unscriptly-gallery-dialog-image alt="" style="display:block;max-width:94vw;max-height:88vh;width:auto;height:auto;object-fit:contain;">
+</dialog>
+<script data-unscriptly-gallery-runtime>(function(){var root=document.getElementById('${id}');if(!root)return;var dialog=document.getElementById('${id}-lightbox');var image=dialog&&dialog.querySelector('[data-unscriptly-gallery-dialog-image]');var items=${imageData};root.addEventListener('click',function(e){var b=e.target.closest('[data-unscriptly-gallery-open]');if(!b||!dialog||!image)return;var item=items[Number(b.getAttribute('data-unscriptly-gallery-open'))];if(!item)return;image.src=item.src;image.alt=item.alt||'';if(dialog.showModal)dialog.showModal();else dialog.setAttribute('open','');});if(dialog){var c=dialog.querySelector('[data-unscriptly-gallery-close]');if(c)c.addEventListener('click',function(){dialog.close?dialog.close():dialog.removeAttribute('open');});dialog.addEventListener('click',function(e){if(e.target===dialog){dialog.close?dialog.close():dialog.removeAttribute('open');}});}})();<\/script>`;
+    }
+    return `<section id="${id}" class="unscriptly-photo-gallery" data-unscriptly-gallery="${layout}" data-unscriptly-gallery-columns="${columns}" style="${wrapperStyle}">${items}</section>${lightbox}`;
+  }
+
+  function slideshowMarkup(assets, opts) {
+    const id = 'unscriptly-slideshow-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    const ratio = opts.ratio || '16 / 9';
+    const fit = opts.fit === 'contain' ? 'contain' : 'cover';
+    const slides = assets.map((asset, index) => {
+      const caption = opts.captions ? `<figcaption style="position:absolute;left:14px;right:14px;bottom:14px;padding:9px 11px;border-radius:8px;background:rgba(0,0,0,.58);color:#fff;font:600 12px/1.4 Arial,sans-serif;backdrop-filter:blur(5px);">${escapeAttr(asset.name || 'Image')}</figcaption>` : '';
+      return `<figure data-unscriptly-slide="${index}" style="position:absolute;inset:0;margin:0;opacity:${index===0?'1':'0'};transform:translateX(${index===0?'0':'100'}%);transition:opacity .45s ease,transform .45s ease;pointer-events:${index===0?'auto':'none'};"><img src="${escapeAttr(asset.url)}" alt="${escapeAttr(asset.name || 'Slide ' + (index + 1))}" loading="${index===0?'eager':'lazy'}" style="display:block;width:100%;height:100%;object-fit:${fit};background:#111;">${caption}</figure>`;
+    }).join('');
+    const arrows = opts.arrows ? `<button type="button" data-unscriptly-slide-prev aria-label="Previous slide" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);z-index:3;width:42px;height:42px;border-radius:50%;border:1px solid rgba(255,255,255,.35);background:rgba(0,0,0,.5);color:#fff;font-size:22px;cursor:pointer;">‹</button><button type="button" data-unscriptly-slide-next aria-label="Next slide" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);z-index:3;width:42px;height:42px;border-radius:50%;border:1px solid rgba(255,255,255,.35);background:rgba(0,0,0,.5);color:#fff;font-size:22px;cursor:pointer;">›</button>` : '';
+    const dots = opts.dots ? `<div data-unscriptly-slide-dots style="position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:4;display:flex;gap:7px;">${assets.map((_,i)=>`<button type="button" data-unscriptly-slide-dot="${i}" aria-label="Go to slide ${i+1}" style="width:8px;height:8px;padding:0;border:0;border-radius:50%;background:${i===0?'#fff':'rgba(255,255,255,.45)'};cursor:pointer;"></button>`).join('')}</div>` : '';
+    return `<section id="${id}" class="unscriptly-slideshow" data-unscriptly-slideshow data-transition="${escapeAttr(opts.transition)}" data-loop="${opts.loop?'true':'false'}" data-autoplay="${opts.autoplay?'true':'false'}" data-interval="${Number(opts.interval||5000)}" style="position:relative;width:100%;margin:24px 0;overflow:hidden;border-radius:14px;background:#111;aspect-ratio:${ratio};">${slides}${arrows}${dots}</section>
+<script data-unscriptly-slideshow-runtime>(function(){var root=document.getElementById('${id}');if(!root)return;var slides=[].slice.call(root.querySelectorAll('[data-unscriptly-slide]'));if(!slides.length)return;var dots=[].slice.call(root.querySelectorAll('[data-unscriptly-slide-dot]'));var current=0;var timer=null;var transition=root.getAttribute('data-transition')||'fade';var loop=root.getAttribute('data-loop')==='true';var autoplay=root.getAttribute('data-autoplay')==='true';var interval=Math.max(1000,Number(root.getAttribute('data-interval')||5000));function render(next){if(next<0)next=loop?slides.length-1:0;if(next>=slides.length)next=loop?0:slides.length-1;current=next;slides.forEach(function(slide,i){var active=i===current;slide.style.opacity=active?'1':'0';slide.style.pointerEvents=active?'auto':'none';if(transition==='slide'){var offset=(i-current)*100;slide.style.transform='translateX('+offset+'%)';}else{slide.style.transform='translateX(0)';}});dots.forEach(function(dot,i){dot.style.background=i===current?'#fff':'rgba(255,255,255,.45)';dot.setAttribute('aria-current',i===current?'true':'false');});}function next(){render(current+1);}function prev(){render(current-1);}function stop(){if(timer){clearInterval(timer);timer=null;}}function start(){stop();if(autoplay&&slides.length>1)timer=setInterval(next,interval);}var nb=root.querySelector('[data-unscriptly-slide-next]');var pb=root.querySelector('[data-unscriptly-slide-prev]');if(nb)nb.addEventListener('click',function(){next();start();});if(pb)pb.addEventListener('click',function(){prev();start();});dots.forEach(function(dot){dot.addEventListener('click',function(){render(Number(dot.getAttribute('data-unscriptly-slide-dot'))||0);start();});});root.addEventListener('mouseenter',stop);root.addEventListener('mouseleave',start);root.addEventListener('focusin',stop);root.addEventListener('focusout',start);render(0);start();})();<\/script>`;
+  }
+
+  function selectedAssets() {
+    return imageAssets().filter(asset => selectedIds.includes(asset.id));
+  }
+
+  function insertGallery() {
+    const assets = selectedAssets();
+    if (!assets.length) return plus.toast('Select at least one image for the gallery.', 'error');
+    const opts = {
+      layout: $('galleryLayoutInput')?.value || 'grid',
+      columns: $('galleryColumnsInput')?.value || '3',
+      gap: $('galleryGapInput')?.value || '12',
+      ratio: $('galleryRatioInput')?.value || 'auto',
+      captions: Boolean($('galleryCaptionsInput')?.checked),
+      lightbox: Boolean($('galleryLightboxInput')?.checked)
+    };
+    plus.insertHtml(galleryMarkup(assets, opts), $('insertPositionInput')?.value || 'smart', { message: 'Photo gallery added.' });
+  }
+
+  function insertSlideshow() {
+    const assets = selectedAssets();
+    if (assets.length < 2) return plus.toast('Select at least two images for a slideshow.', 'error');
+    const opts = {
+      transition: $('slideshowTransitionInput')?.value || 'fade',
+      ratio: $('slideshowRatioInput')?.value || '16 / 9',
+      fit: $('slideshowFitInput')?.value || 'cover',
+      interval: $('slideshowIntervalInput')?.value || '5000',
+      autoplay: Boolean($('slideshowAutoplayInput')?.checked),
+      loop: Boolean($('slideshowLoopInput')?.checked),
+      arrows: Boolean($('slideshowArrowsInput')?.checked),
+      dots: Boolean($('slideshowDotsInput')?.checked),
+      captions: Boolean($('slideshowCaptionsInput')?.checked)
+    };
+    plus.insertHtml(slideshowMarkup(assets, opts), $('insertPositionInput')?.value || 'smart', { message: 'Slideshow added.' });
+  }
+
+  function addElementsShortcuts() {
+    const groups = Array.from(document.querySelectorAll('#elementCatalog .element-group'));
+    const mediaGroup = groups.find(group => /Media/i.test(group.querySelector('.element-group-title')?.textContent || ''));
+    const grid = mediaGroup && mediaGroup.querySelector('.element-grid');
+    if (!grid) return;
+    [
+      { type:'gallery', glyph:'▦', label:'Gallery', search:'photo gallery images grid masonry filmstrip media', mode:'gallery' },
+      { type:'slideshow', glyph:'▻', label:'Slideshow', search:'slideshow carousel slider images media autoplay', mode:'slideshow' }
+    ].forEach(item => {
+      if (grid.querySelector('[data-element="'+item.type+'"]')) return;
+      const button = document.createElement('button');
+      button.className = 'element-tile';
+      button.type = 'button';
+      button.dataset.element = item.type;
+      button.dataset.search = item.search;
+      button.innerHTML = `<span class="element-glyph">${item.glyph}</span><span>${item.label}</span>`;
+      button.addEventListener('click', () => {
+        document.querySelector('[data-library-view="media"]')?.click();
+        window.setTimeout(() => { setMode(item.mode); $('mediaCompositionBuilder')?.scrollIntoView({ behavior:'smooth', block:'start' }); }, 60);
+      });
+      grid.appendChild(button);
+    });
+  }
+
+  function bind() {
+    injectBuilder();
+    renderPicker();
+    addElementsShortcuts();
+    $('galleryModeBtn')?.addEventListener('click', () => setMode('gallery'));
+    $('slideshowModeBtn')?.addEventListener('click', () => setMode('slideshow'));
+    $('insertGalleryBtn')?.addEventListener('click', insertGallery);
+    $('insertSlideshowBtn')?.addEventListener('click', insertSlideshow);
+    document.addEventListener('htmlstudio:media-changed', renderPicker);
+    const mediaGrid = $('mediaGrid');
+    if (mediaGrid && window.MutationObserver) new MutationObserver(renderPicker).observe(mediaGrid, { childList:true, subtree:true });
+    setStatus('ready');
+  }
+
+  function start(attempt) {
+    if (window.HTMLStudioMedia) return bind();
+    if (attempt > 20) { setStatus('error'); return plus.toast('Gallery & Slideshow need the Media module to be available.', 'error'); }
+    window.setTimeout(() => start(attempt + 1), 50);
+  }
+
+  try { start(0); }
+  catch (error) {
+    console.error('[HTML Studio] Gallery/Slideshow module failed:', error);
+    setStatus('error');
+    plus.toast('Gallery & Slideshow could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

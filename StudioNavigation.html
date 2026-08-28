@@ -1,0 +1,568 @@
+<script>
+(() => {
+  'use strict';
+
+  const plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  let selection = null;
+  let pageObserver = null;
+
+  const $ = id => document.getElementById(id);
+  const setStatus = value =>
+    document.documentElement.setAttribute('data-html-studio-navigation', value);
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function clean(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  function parseStructuralPath(value) {
+    if (!value || value === 'body') return [];
+    if (!/^\d+(?:\.\d+)*$/.test(String(value))) return null;
+    return String(value).split('.').map(part => parseInt(part, 10));
+  }
+
+  function resolveStructuralPath(doc, value) {
+    if (!doc || !doc.body) return null;
+    if (value === 'body') return doc.body;
+    const parts = parseStructuralPath(value);
+    if (!parts) return null;
+
+    let node = doc.body;
+    for (let i = 0; i < parts.length; i++) {
+      if (!node.children || !node.children[parts[i]]) return null;
+      node = node.children[parts[i]];
+    }
+    return node;
+  }
+
+  function currentLayerPath() {
+    try {
+      if (
+        window.HTMLStudioLayers &&
+        typeof window.HTMLStudioLayers.getActivePath === 'function'
+      ) {
+        return String(window.HTMLStudioLayers.getActivePath() || '');
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function selectedTarget(doc) {
+    if (!selection || !doc) return null;
+
+    if (selection.id) {
+      const byId = doc.getElementById(selection.id);
+      if (byId) return byId;
+    }
+
+    const exactPath = currentLayerPath();
+    if (exactPath) {
+      const byPath = resolveStructuralPath(doc, exactPath);
+      if (
+        byPath &&
+        (!selection.tag ||
+          String(byPath.tagName || '').toLowerCase() ===
+          String(selection.tag).toLowerCase())
+      ) {
+        return byPath;
+      }
+    }
+
+    if (selection.path) {
+      try {
+        const matches = Array.from(doc.querySelectorAll(selection.path));
+        if (matches.length === 1) return matches[0];
+
+        const wantedText = clean(selection.text);
+        const wantedHref = clean(selection.attrs && selection.attrs.href);
+
+        if (wantedText) {
+          const textMatches = matches.filter(
+            el => clean(el.textContent) === wantedText
+          );
+          if (textMatches.length === 1) return textMatches[0];
+        }
+
+        if (wantedHref) {
+          const hrefMatches = matches.filter(
+            el => clean(el.getAttribute('href')) === wantedHref
+          );
+          if (hrefMatches.length === 1) return hrefMatches[0];
+        }
+      } catch (_) {}
+    }
+
+    let candidates = [];
+    try {
+      candidates = Array.from(doc.querySelectorAll(selection.tag || '*'));
+    } catch (_) {}
+
+    if (selection.classes && selection.classes.length) {
+      candidates = candidates.filter(el =>
+        selection.classes.every(name => el.classList.contains(name))
+      );
+    }
+
+    if (candidates.length === 1) return candidates[0];
+
+    const wantedText = clean(selection.text);
+    const wantedHref = clean(selection.attrs && selection.attrs.href);
+
+    if (wantedText) {
+      const textMatches = candidates.filter(
+        el => clean(el.textContent) === wantedText
+      );
+      if (textMatches.length === 1) return textMatches[0];
+
+      if (wantedHref && textMatches.length > 1) {
+        const exact = textMatches.filter(
+          el => clean(el.getAttribute('href')) === wantedHref
+        );
+        if (exact.length === 1) return exact[0];
+      }
+    }
+
+    if (wantedHref) {
+      const hrefMatches = candidates.filter(
+        el => clean(el.getAttribute('href')) === wantedHref
+      );
+      if (hrefMatches.length === 1) return hrefMatches[0];
+    }
+
+    return null;
+  }
+
+  function serializeSource(doc, original) {
+    const prefix = /^\s*<!doctype\s+html[^>]*>/i.test(String(original || ''))
+      ? '<!DOCTYPE html>\n'
+      : '';
+    return prefix + doc.documentElement.outerHTML;
+  }
+
+  function patchExactSelected(mutator, message) {
+    if (!selection) {
+      plus.toast('Select the exact button or link first.', 'error');
+      return false;
+    }
+
+    return plus.withSource(source => {
+      const doc = new DOMParser().parseFromString(String(source || ''), 'text/html');
+      const target = selectedTarget(doc);
+
+      if (!target) {
+        plus.toast(
+          'UnScriptly could not uniquely identify that control. Re-select it or choose it from Layers. No other navigation links were changed.',
+          'error'
+        );
+        return source;
+      }
+
+      mutator(target, doc);
+      return serializeSource(doc, source);
+    }, message || 'Navigation updated.');
+  }
+
+  function currentMapping() {
+    const source = plus.readSource();
+    if (!source || !selection) return null;
+
+    try {
+      const doc = new DOMParser().parseFromString(source, 'text/html');
+      const target = selectedTarget(doc);
+      if (!target) return null;
+
+      const href = target.getAttribute('href') || '';
+      const explicitKind = target.getAttribute('data-unscriptly-navigation') || '';
+      const kind = explicitKind ||
+        (href.startsWith('#') ? 'anchor' : (href ? 'url' : 'page'));
+
+      return {
+        tag: target.tagName.toLowerCase(),
+        href,
+        kind,
+        newTab: target.getAttribute('target') === '_blank',
+        originalTag: target.getAttribute('data-unscriptly-original-tag') || ''
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function loadedPages() {
+    return Array.from(document.querySelectorAll('#pageList .page-name'))
+      .map(node => String(node.textContent || '').trim())
+      .filter(Boolean);
+  }
+
+  function pageAnchors() {
+    const source = plus.readSource();
+    if (!source) return [];
+
+    try {
+      const doc = new DOMParser().parseFromString(source, 'text/html');
+      return Array.from(doc.querySelectorAll('[id]'))
+        .map(el => ({
+          id: el.id,
+          label: (
+            el.getAttribute('aria-label') ||
+            el.textContent ||
+            el.id
+          ).trim().replace(/\s+/g, ' ').slice(0, 46)
+        }))
+        .filter(item => item.id);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function buildUi() {
+    const inspector = $('inspectorContent');
+    const typography =
+      $('typographyControls') &&
+      $('typographyControls').closest('.control-section');
+
+    if (!inspector || $('navigationMappingSection')) return;
+
+    const section = document.createElement('section');
+    section.className = 'control-section navigation-mapping-section hidden';
+    section.id = 'navigationMappingSection';
+    section.innerHTML = `
+      <button class="section-toggle" type="button"
+        data-toggle="navigationMappingControls">
+        <span>Navigation</span><span>⌃</span>
+      </button>
+      <div class="section-body" id="navigationMappingControls">
+        <div class="navigation-map-intro">
+          <strong>Map this control</strong>
+          <span>Applies only to the exact selected button or link.</span>
+        </div>
+        <label class="field-label" for="navigationTypeInput">Destination type</label>
+        <select id="navigationTypeInput" class="field">
+          <option value="page">Loaded page / screen</option>
+          <option value="anchor">Section on this page</option>
+          <option value="url">URL / custom route</option>
+        </select>
+        <div id="navigationPageControls">
+          <label class="field-label" for="navigationPageInput">Page / screen</label>
+          <select id="navigationPageInput" class="field"></select>
+        </div>
+        <div id="navigationAnchorControls" class="hidden">
+          <label class="field-label" for="navigationAnchorInput">Section / anchor</label>
+          <select id="navigationAnchorInput" class="field"></select>
+        </div>
+        <div id="navigationUrlControls" class="hidden">
+          <label class="field-label" for="navigationUrlInput">URL or route</label>
+          <input id="navigationUrlInput" class="field" type="text"
+            placeholder="/dashboard, page.html, or https://…">
+        </div>
+        <label class="check-row navigation-new-tab-row">
+          <input id="navigationNewTabInput" type="checkbox"> Open in new tab
+        </label>
+        <div class="navigation-map-actions">
+          <button id="applyNavigationBtn" class="button primary"
+            type="button">Apply mapping</button>
+          <button id="clearNavigationBtn" class="button secondary"
+            type="button">Clear</button>
+        </div>
+        <div id="navigationMappingStatus" class="field-help"></div>
+      </div>`;
+
+    if (typography && typography.parentNode === inspector) {
+      inspector.insertBefore(section, typography);
+    } else {
+      inspector.appendChild(section);
+    }
+
+    const toggle = section.querySelector('.section-toggle');
+    if (toggle) {
+      toggle.addEventListener('click', () => {
+        const body = $('navigationMappingControls');
+        if (body) body.classList.toggle('collapsed');
+      });
+    }
+  }
+
+  function refreshPageOptions() {
+    const input = $('navigationPageInput');
+    if (!input) return;
+
+    const current = input.value;
+    const pages = loadedPages();
+
+    input.innerHTML = pages.length
+      ? pages.map(name =>
+          `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`
+        ).join('')
+      : '<option value="">No loaded pages</option>';
+
+    if (pages.includes(current)) input.value = current;
+  }
+
+  function refreshAnchorOptions() {
+    const input = $('navigationAnchorInput');
+    if (!input) return;
+
+    const current = input.value;
+    const anchors = pageAnchors();
+
+    input.innerHTML = anchors.length
+      ? anchors.map(item =>
+          `<option value="#${escapeHtml(item.id)}">${escapeHtml(
+            item.label || item.id
+          )} · #${escapeHtml(item.id)}</option>`
+        ).join('')
+      : '<option value="">No element IDs found on this page</option>';
+
+    if (Array.from(input.options).some(opt => opt.value === current)) {
+      input.value = current;
+    }
+  }
+
+  function showMode(mode) {
+    const page = $('navigationPageControls');
+    const anchor = $('navigationAnchorControls');
+    const url = $('navigationUrlControls');
+
+    if (page) page.classList.toggle('hidden', mode !== 'page');
+    if (anchor) anchor.classList.toggle('hidden', mode !== 'anchor');
+    if (url) url.classList.toggle('hidden', mode !== 'url');
+  }
+
+  function refreshSelectionUi() {
+    const section = $('navigationMappingSection');
+    if (!section) return;
+
+    const allowed =
+      selection &&
+      (selection.tag === 'a' || selection.tag === 'button');
+
+    section.classList.toggle('hidden', !allowed);
+    if (!allowed) return;
+
+    refreshPageOptions();
+    refreshAnchorOptions();
+
+    const mapping = currentMapping();
+    const type = $('navigationTypeInput');
+    const urlInput = $('navigationUrlInput');
+    const newTab = $('navigationNewTabInput');
+    const status = $('navigationMappingStatus');
+
+    let mode =
+      mapping && ['page','anchor','url'].includes(mapping.kind)
+        ? mapping.kind
+        : 'page';
+
+    if (type) type.value = mode;
+    showMode(mode);
+
+    if (mapping) {
+      if (mode === 'page' && $('navigationPageInput')) {
+        const pageInput = $('navigationPageInput');
+        if (
+          Array.from(pageInput.options).some(
+            opt => opt.value === mapping.href
+          )
+        ) {
+          pageInput.value = mapping.href;
+        }
+      } else if (mode === 'anchor' && $('navigationAnchorInput')) {
+        const anchorInput = $('navigationAnchorInput');
+        if (
+          Array.from(anchorInput.options).some(
+            opt => opt.value === mapping.href
+          )
+        ) {
+          anchorInput.value = mapping.href;
+        }
+      } else if (urlInput) {
+        urlInput.value = mapping.href || '';
+      }
+
+      if (newTab) newTab.checked = mapping.newTab;
+
+      if (status) {
+        status.textContent = mapping.href
+          ? 'Current destination for this exact element: ' + mapping.href
+          : (selection.tag === 'button'
+              ? 'This button is not mapped yet.'
+              : 'This link has no destination yet.');
+      }
+    } else if (status) {
+      status.textContent =
+        'This repeated element could not be uniquely resolved. Re-select it or choose it from Layers before applying a destination.';
+    }
+  }
+
+  function applyMapping() {
+    if (!selection || (selection.tag !== 'a' && selection.tag !== 'button')) {
+      plus.toast('Select a button or link first.', 'error');
+      return;
+    }
+
+    const mode = $('navigationTypeInput')
+      ? $('navigationTypeInput').value
+      : 'page';
+
+    let href = '';
+
+    if (mode === 'page') {
+      href = $('navigationPageInput')
+        ? $('navigationPageInput').value
+        : '';
+    } else if (mode === 'anchor') {
+      href = $('navigationAnchorInput')
+        ? $('navigationAnchorInput').value
+        : '';
+    } else {
+      href = $('navigationUrlInput')
+        ? String($('navigationUrlInput').value || '').trim()
+        : '';
+    }
+
+    if (!href) {
+      plus.toast('Choose or enter a destination.', 'error');
+      return;
+    }
+
+    const newTab = Boolean(
+      $('navigationNewTabInput') &&
+      $('navigationNewTabInput').checked
+    );
+
+    patchExactSelected((target, doc) => {
+      let link = target;
+
+      if (target.tagName.toLowerCase() === 'button') {
+        link = doc.createElement('a');
+
+        Array.from(target.attributes).forEach(attr => {
+          if (![
+            'type','form','formaction','formmethod',
+            'formenctype','formtarget','disabled'
+          ].includes(attr.name.toLowerCase())) {
+            link.setAttribute(attr.name, attr.value);
+          }
+        });
+
+        link.innerHTML = target.innerHTML;
+        link.setAttribute('data-unscriptly-original-tag', 'button');
+        link.setAttribute('role', link.getAttribute('role') || 'button');
+        target.parentNode.replaceChild(link, target);
+      }
+
+      link.setAttribute('href', href);
+      link.setAttribute('data-unscriptly-navigation', mode);
+
+      if (newTab) {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+      } else {
+        link.removeAttribute('target');
+        link.removeAttribute('rel');
+      }
+    }, 'Navigation applied to selected element only.');
+  }
+
+  function clearMapping() {
+    if (!selection) return;
+
+    patchExactSelected((target, doc) => {
+      if (
+        target.tagName.toLowerCase() === 'a' &&
+        target.getAttribute('data-unscriptly-original-tag') === 'button'
+      ) {
+        const button = doc.createElement('button');
+
+        Array.from(target.attributes).forEach(attr => {
+          if (![
+            'href','target','rel','role','data-unscriptly-original-tag',
+            'data-unscriptly-navigation'
+          ].includes(attr.name.toLowerCase())) {
+            button.setAttribute(attr.name, attr.value);
+          }
+        });
+
+        button.setAttribute('type', 'button');
+        button.innerHTML = target.innerHTML;
+        target.parentNode.replaceChild(button, target);
+      } else {
+        target.removeAttribute('href');
+        target.removeAttribute('target');
+        target.removeAttribute('rel');
+        target.removeAttribute('data-unscriptly-navigation');
+      }
+    }, 'Navigation cleared from selected element only.');
+  }
+
+  function bind() {
+    buildUi();
+
+    const type = $('navigationTypeInput');
+    if (type) type.addEventListener('change', () => showMode(type.value));
+
+    const apply = $('applyNavigationBtn');
+    if (apply) apply.addEventListener('click', applyMapping);
+
+    const clear = $('clearNavigationBtn');
+    if (clear) clear.addEventListener('click', clearMapping);
+
+    document.addEventListener('htmlstudio:plus-selection', event => {
+      selection = event.detail || null;
+      window.setTimeout(refreshSelectionUi, 20);
+    });
+
+    document.addEventListener(
+      'htmlstudio:plus-preview-ready',
+      () => window.setTimeout(() => {
+        refreshPageOptions();
+        refreshAnchorOptions();
+        refreshSelectionUi();
+      }, 80)
+    );
+
+    window.addEventListener('message', event => {
+      const frame = $('previewFrame');
+      if (!frame || event.source !== frame.contentWindow) return;
+      const msg = event.data || {};
+      if (
+        msg.source === 'unscriptly-html-studio' &&
+        msg.type === 'NCE_LAYER_SELECTED_PATH'
+      ) {
+        window.setTimeout(refreshSelectionUi, 0);
+      }
+    });
+
+    const list = $('pageList');
+    if (list && window.MutationObserver) {
+      pageObserver = new MutationObserver(() => refreshPageOptions());
+      pageObserver.observe(list, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
+    }
+
+    refreshPageOptions();
+    setStatus('ready');
+  }
+
+  try {
+    bind();
+  } catch (error) {
+    console.error('[HTML Studio] Navigation mapping module failed:', error);
+    setStatus('error');
+    plus.toast(
+      'Navigation mapping could not initialize. Core editing remains available.',
+      'error'
+    );
+  }
+})();
+</script>

@@ -1,0 +1,204 @@
+<script>
+(function () {
+  'use strict';
+  var plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  var STYLE_ID = 'unscriptly-global-overrides';
+  var FONT_ATTR = 'data-unscriptly-global-font';
+  var GOOGLE_FONTS = {
+    'Inter': true, 'Roboto': true, 'Open Sans': true, 'Lato': true, 'Montserrat': true,
+    'Poppins': true, 'DM Sans': true, 'Manrope': true, 'Plus Jakarta Sans': true,
+    'Space Grotesk': true, 'IBM Plex Sans': true, 'Nunito Sans': true, 'Work Sans': true,
+    'Source Sans 3': true, 'Merriweather': true, 'Playfair Display': true, 'Libre Baskerville': true
+  };
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
+  function setStatus(value) { document.documentElement.setAttribute('data-html-studio-global', value); }
+  function val(id) { var el = $(id); return el ? String(el.value || '').trim() : ''; }
+  function checked(id) { var el = $(id); return !!(el && el.checked); }
+
+  function cssFont(value) {
+    var stacks = {
+      'Arial': 'Arial, sans-serif',
+      'Georgia': 'Georgia, serif',
+      'Times New Roman': '"Times New Roman", Times, serif',
+      'Verdana': 'Verdana, sans-serif',
+      'Courier New': '"Courier New", monospace'
+    };
+    if (!value || value === '__keep__') return '';
+    return stacks[value] || ('"' + value.replace(/"/g, '') + '", sans-serif');
+  }
+
+  function googleFontUrl(family) {
+    return 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(family).replace(/%20/g, '+') + ':wght@300;400;500;600;700;800;900&display=swap';
+  }
+
+  function collectSettings() {
+    return {
+      bodyFont: val('globalBodyFontInput'),
+      headingFont: val('globalHeadingFontInput'),
+      fontSize: val('globalFontSizeInput'),
+      lineHeight: val('globalLineHeightInput'),
+      headingWeight: val('globalHeadingWeightInput'),
+      useBackground: checked('globalUseBackground'), background: val('globalBackgroundColor'),
+      useText: checked('globalUseText'), text: val('globalTextColor'),
+      useHeading: checked('globalUseHeading'), heading: val('globalHeadingColor'),
+      useAccent: checked('globalUseAccent'), accent: val('globalAccentColor'),
+      useSurface: checked('globalUseSurface'), surface: val('globalSurfaceColor'),
+      useBorder: checked('globalUseBorder'), border: val('globalBorderColor'),
+      styleLinks: checked('globalStyleLinks'),
+      styleButtons: checked('globalStyleButtons'),
+      buttonText: val('globalButtonTextColor') || '#ffffff',
+      buttonRadius: val('globalButtonRadiusInput'),
+      cardRadius: val('globalCardRadiusInput'),
+      mediaRadius: val('globalMediaRadiusInput'),
+      controlRadius: val('globalControlRadiusInput'),
+      shadow: val('globalShadowInput')
+    };
+  }
+
+  function buildCss(s) {
+    var rules = [];
+    var vars = [];
+    if (s.useBackground) vars.push('--unscriptly-page-bg:' + s.background);
+    if (s.useText) vars.push('--unscriptly-text:' + s.text);
+    if (s.useHeading) vars.push('--unscriptly-heading:' + s.heading);
+    if (s.useAccent) vars.push('--unscriptly-accent:' + s.accent);
+    if (s.useSurface) vars.push('--unscriptly-surface:' + s.surface);
+    if (s.useBorder) vars.push('--unscriptly-border:' + s.border);
+    if (vars.length) rules.push(':root{' + vars.join(';') + ';}');
+
+    var body = [];
+    if (s.bodyFont && s.bodyFont !== '__keep__') body.push('font-family:' + cssFont(s.bodyFont) + ' !important');
+    if (s.fontSize) body.push('font-size:' + s.fontSize.replace(/[^0-9.]/g, '') + 'px !important');
+    if (s.lineHeight) body.push('line-height:' + s.lineHeight + ' !important');
+    if (s.useBackground) body.push('background-color:' + s.background + ' !important');
+    if (s.useText) body.push('color:' + s.text + ' !important');
+    if (body.length) rules.push('html,body{' + body.join(';') + ';}');
+
+    var headings = [];
+    if (s.headingFont && s.headingFont !== '__keep__') headings.push('font-family:' + cssFont(s.headingFont) + ' !important');
+    if (s.headingWeight && s.headingWeight !== '__keep__') headings.push('font-weight:' + s.headingWeight + ' !important');
+    if (s.useHeading) headings.push('color:' + s.heading + ' !important');
+    if (headings.length) rules.push('h1,h2,h3,h4,h5,h6{' + headings.join(';') + ';}');
+
+    if (s.useAccent && s.styleLinks) rules.push('a{color:' + s.accent + ' !important;}');
+    if (s.useAccent && s.styleButtons) {
+      rules.push('button,.button,[role="button"],input[type="button"],input[type="submit"]{background-color:' + s.accent + ' !important;border-color:' + s.accent + ' !important;color:' + s.buttonText + ' !important;}');
+    }
+    if (s.buttonRadius) rules.push('button,.button,[role="button"],input[type="button"],input[type="submit"]{border-radius:' + s.buttonRadius.replace(/[^0-9.]/g, '') + 'px !important;}');
+    if (s.controlRadius) rules.push('input,textarea,select{border-radius:' + s.controlRadius.replace(/[^0-9.]/g, '') + 'px !important;}');
+    if (s.cardRadius) rules.push('.card,[class*="card"],.panel,[class*="panel"]{border-radius:' + s.cardRadius.replace(/[^0-9.]/g, '') + 'px !important;}');
+    if (s.mediaRadius) rules.push('img,video{border-radius:' + s.mediaRadius.replace(/[^0-9.]/g, '') + 'px !important;}');
+    if (s.useSurface) rules.push('.card,[class*="card"],.panel,[class*="panel"]{background-color:' + s.surface + ' !important;}');
+    if (s.useBorder) rules.push('.card,[class*="card"],.panel,[class*="panel"],input,textarea,select,button,.button,[role="button"]{border-color:' + s.border + ' !important;}');
+    if (s.shadow === 'none') rules.push('.card,[class*="card"],.panel,[class*="panel"],button,.button{box-shadow:none !important;}');
+    if (s.shadow === 'soft') rules.push('.card,[class*="card"],.panel,[class*="panel"]{box-shadow:0 10px 30px rgba(0,0,0,.08) !important;}');
+    if (s.shadow === 'medium') rules.push('.card,[class*="card"],.panel,[class*="panel"]{box-shadow:0 18px 45px rgba(0,0,0,.14) !important;}');
+    return rules.join('\n');
+  }
+
+  function ensureFont(doc, family, key) {
+    if (!family || family === '__keep__' || !GOOGLE_FONTS[family]) return;
+    var existing = doc.querySelector('link[' + FONT_ATTR + '="' + key + '"]');
+    if (!existing) {
+      existing = doc.createElement('link');
+      existing.rel = 'stylesheet';
+      existing.setAttribute(FONT_ATTR, key);
+      (doc.head || doc.documentElement).appendChild(existing);
+    }
+    existing.href = googleFontUrl(family);
+  }
+
+  function patchSource(source, settings, resetOnly) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(String(source || ''), 'text/html');
+    var old = doc.getElementById(STYLE_ID);
+    var oldFonts = qsa('link[' + FONT_ATTR + ']', doc);
+    var hadOverrides = !!old || oldFonts.length > 0;
+    if (resetOnly && !hadOverrides) return source;
+    if (old) old.remove();
+    oldFonts.forEach(function (link) { link.remove(); });
+    if (!resetOnly) {
+      var css = buildCss(settings);
+      var needsBodyFont = settings.bodyFont && settings.bodyFont !== '__keep__' && GOOGLE_FONTS[settings.bodyFont];
+      var needsHeadingFont = settings.headingFont && settings.headingFont !== '__keep__' && GOOGLE_FONTS[settings.headingFont];
+      if (!css && !needsBodyFont && !needsHeadingFont && !hadOverrides) return source;
+      if (css) {
+        var style = doc.createElement('style');
+        style.id = STYLE_ID;
+        style.setAttribute('data-unscriptly-generated', 'global-styles');
+        style.textContent = css;
+        (doc.head || doc.documentElement).appendChild(style);
+      }
+      ensureFont(doc, settings.bodyFont, 'body');
+      ensureFont(doc, settings.headingFont, 'headings');
+    }
+    var prefix = /^\s*<!doctype\s+html[^>]*>/i.test(String(source || '')) ? '<!DOCTYPE html>\n' : '';
+    return prefix + doc.documentElement.outerHTML;
+  }
+
+  function pageNames() {
+    return qsa('#pageList .page-item .page-name').map(function (node) { return String(node.textContent || '').trim(); }).filter(Boolean);
+  }
+
+  function activatePage(name) {
+    var items = qsa('#pageList .page-item');
+    for (var i = 0; i < items.length; i++) {
+      var node = items[i].querySelector('.page-name');
+      if (node && String(node.textContent || '').trim() === name) { items[i].click(); return true; }
+    }
+    return false;
+  }
+
+  function removeNewToasts(before) {
+    var region = $('toastRegion');
+    if (!region) return;
+    while (region.children.length > before) region.removeChild(region.lastElementChild);
+  }
+
+  function patchActive(settings, resetOnly) {
+    var region = $('toastRegion');
+    var count = region ? region.children.length : 0;
+    var changed = plus.withSource(function (source) { return patchSource(source, settings, resetOnly); }, '');
+    removeNewToasts(count);
+    return changed;
+  }
+
+  function applyScope(resetOnly) {
+    if (!plus.hasPage()) { plus.toast('Import or create a page first.', 'error'); return; }
+    var scope = val('globalScopeInput') || 'current';
+    var settings = collectSettings();
+    if (scope === 'current') {
+      patchActive(settings, resetOnly);
+      plus.toast(resetOnly ? 'Global overrides removed from this page.' : 'Global styles applied to this page.');
+      return;
+    }
+
+    var names = pageNames();
+    var activeName = $('currentPageLabel') ? String($('currentPageLabel').textContent || '').trim() : '';
+    var changed = 0;
+    names.forEach(function (name) {
+      if (!activatePage(name)) return;
+      if (patchActive(settings, resetOnly)) changed++;
+    });
+    if (activeName) activatePage(activeName);
+    plus.toast(resetOnly ? 'Global overrides removed from ' + names.length + ' pages.' : 'Global styles applied to ' + names.length + ' pages.');
+  }
+
+  function init() {
+    if ($('applyGlobalStylesBtn')) $('applyGlobalStylesBtn').addEventListener('click', function () { applyScope(false); });
+    if ($('resetGlobalStylesBtn')) $('resetGlobalStylesBtn').addEventListener('click', function () { applyScope(true); });
+    setStatus('ready');
+  }
+
+  try { init(); }
+  catch (error) {
+    console.error('[HTML Studio] Global style module failed:', error);
+    setStatus('error');
+    plus.toast('Global style controls could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

@@ -1,0 +1,588 @@
+<script>
+(function () {
+  'use strict';
+
+  var plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  var NON_VISUAL = { SCRIPT:1, STYLE:1, LINK:1, META:1, TITLE:1, BASE:1, NOSCRIPT:1, TEMPLATE:1 };
+  var TEXT_TAGS = { H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,P:1,SPAN:1,LABEL:1,A:1,BUTTON:1,BLOCKQUOTE:1,SMALL:1,STRONG:1,EM:1,B:1,I:1,CODE:1,PRE:1,FIGCAPTION:1,DT:1,DD:1 };
+  var MEDIA_TAGS = { IMG:1,PICTURE:1,VIDEO:1,AUDIO:1,IFRAME:1,OBJECT:1,EMBED:1,CANVAS:1 };
+  var SEMANTIC_FRAMES = { MAIN:1,SECTION:1,ARTICLE:1,HEADER:1,FOOTER:1,NAV:1,ASIDE:1 };
+  var GROUP_TAGS = { DIV:1,FORM:1,FIELDSET:1,FIGURE:1,UL:1,OL:1,LI:1,TABLE:1,THEAD:1,TBODY:1,TFOOT:1,TR:1,TD:1,TH:1 };
+
+  var collapsed = {};
+  var activePath = '';
+  var activeManualPath = '';
+  var refreshTimer = 0;
+  var dragState = null;
+  var canvasPathHint = '';
+  var pendingRevealPath = '';
+  var hoveredLayerPath = '';
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
+  function setStatus(value) { document.documentElement.setAttribute('data-html-studio-layers', value); }
+
+  function readSource() {
+    if (!plus.hasPage()) return '';
+    if (plus.readSource) return String(plus.readSource() || '');
+    var source = '';
+    plus.withSource(function (html) {
+      source = String(html || '');
+      return html;
+    });
+    return source;
+  }
+
+  function parseSource(source) {
+    return new DOMParser().parseFromString(String(source || ''), 'text/html');
+  }
+
+  function serializeSource(doc, original) {
+    var prefix = /^\s*<!doctype\s+html[^>]*>/i.test(String(original || '')) ? '<!DOCTYPE html>\n' : '';
+    return prefix + doc.documentElement.outerHTML;
+  }
+
+  function pathKey(path) { return path && path.length ? path.join('.') : 'body'; }
+  function pathArray(value) {
+    if (!value || value === 'body') return [];
+    return String(value).split('.').filter(Boolean).map(function (part) { return parseInt(part, 10); });
+  }
+
+  function expandAncestors(path) {
+    if (!path || path === 'body') return;
+    var parts = pathArray(path);
+    for (var i = 1; i < parts.length; i++) delete collapsed[pathKey(parts.slice(0, i))];
+  }
+
+  function findLayerRow(path) {
+    var tree = $('layersTree');
+    if (!tree || !path) return null;
+    var rows = tree.querySelectorAll('.layer-row[data-layer-path]');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute('data-layer-path') === path) return rows[i];
+    }
+    return null;
+  }
+
+  function revealLayerRow(path) {
+    if (!path) return;
+    window.requestAnimationFrame(function () {
+      var row = findLayerRow(path);
+      var view = $('layersLibraryView');
+      if (!row || !view || view.classList.contains('hidden')) return;
+      try { row.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); }
+      catch (_) { try { row.scrollIntoView(false); } catch (__) {} }
+    });
+  }
+
+  function sendPreviewLayerMessage(type, path) {
+    var frame = $('previewFrame');
+    if (!frame || !frame.contentWindow) return;
+    frame.contentWindow.postMessage({ source: 'unscriptly-html-studio', type: type, path: path || '' }, '*');
+  }
+
+  function hoverPreviewPath(path) {
+    hoveredLayerPath = path || '';
+    sendPreviewLayerMessage(path ? 'NCE_LAYER_HOVER_PATH' : 'NCE_LAYER_HOVER_CLEAR', path || '');
+  }
+
+
+  function resolvePath(doc, path) {
+    var node = doc.body;
+    var parts = Array.isArray(path) ? path : pathArray(path);
+    for (var i = 0; i < parts.length; i++) {
+      if (!node || !node.children || !node.children[parts[i]]) return null;
+      node = node.children[parts[i]];
+    }
+    return node;
+  }
+
+  function structuralPath(el, body) {
+    if (!el || !body) return '';
+    if (el === body) return 'body';
+    var parts = [];
+    var cursor = el;
+    while (cursor && cursor !== body) {
+      var parent = cursor.parentElement;
+      if (!parent) return '';
+      var index = Array.prototype.indexOf.call(parent.children, cursor);
+      if (index < 0) return '';
+      parts.unshift(index);
+      cursor = parent;
+    }
+    return cursor === body ? pathKey(parts) : '';
+  }
+
+  function isVisibleLayer(el) {
+    return !!el && !NON_VISUAL[el.tagName];
+  }
+
+  function hasVisualChildren(el) {
+    if (!el || !el.children) return false;
+    for (var i = 0; i < el.children.length; i++) if (isVisibleLayer(el.children[i])) return true;
+    return false;
+  }
+
+  function kindFor(el) {
+    if (!el) return 'element';
+    if (el.tagName === 'BODY') return 'page';
+    if (el.getAttribute('data-unscriptly-frame') === 'true' || SEMANTIC_FRAMES[el.tagName]) return 'frame';
+    if (el.getAttribute('data-unscriptly-group') === 'true' || (GROUP_TAGS[el.tagName] && hasVisualChildren(el))) return 'group';
+    if (MEDIA_TAGS[el.tagName]) return 'media';
+    if (el.tagName === 'SVG' || el.tagName === 'HR' || /(?:shape|circle|spacer|rectangle|ellipse)/i.test(el.getAttribute('aria-label') || '')) return 'shape';
+    if (TEXT_TAGS[el.tagName] || (!hasVisualChildren(el) && String(el.textContent || '').trim())) return 'text';
+    return hasVisualChildren(el) ? 'group' : 'element';
+  }
+
+  function isNestable(el) {
+    var kind = kindFor(el);
+    return kind === 'page' || kind === 'frame' || kind === 'group';
+  }
+
+  function iconFor(kind) {
+    if (kind === 'page') return '▤';
+    if (kind === 'frame') return '▣';
+    if (kind === 'group') return '⌗';
+    if (kind === 'text') return 'T';
+    if (kind === 'shape') return '○';
+    if (kind === 'media') return '▧';
+    return '◇';
+  }
+
+  function cleanText(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+
+  function layerLabel(el, kind) {
+    if (!el) return 'Layer';
+    if (el.tagName === 'BODY') return 'Page';
+    var explicit = cleanText(el.getAttribute('data-layer-name'));
+    if (explicit) return explicit;
+    var id = cleanText(el.id);
+    var classes = cleanText(el.className && typeof el.className === 'string' ? el.className : '');
+    var text = cleanText(el.textContent).slice(0, 36);
+    if (kind === 'frame') {
+      if (id) return 'Frame · #' + id;
+      if (classes) return 'Frame · .' + classes.split(' ')[0];
+      return el.tagName.toLowerCase() === 'section' ? 'Section frame' : el.tagName.toLowerCase() + ' frame';
+    }
+    if (kind === 'group') {
+      if (id) return 'Group · #' + id;
+      if (classes) return 'Group · .' + classes.split(' ')[0];
+      return el.tagName.toLowerCase() + ' group';
+    }
+    if (el.tagName === 'IMG') return cleanText(el.getAttribute('alt')) || 'Image';
+    if (el.tagName === 'VIDEO') return 'Video';
+    if (el.tagName === 'AUDIO') return 'Audio';
+    if (el.tagName === 'SVG') return cleanText(el.getAttribute('aria-label')) || 'SVG';
+    if (kind === 'shape') return cleanText(el.getAttribute('aria-label')) || el.tagName.toLowerCase() + ' shape';
+    if (text) return text;
+    if (id) return el.tagName.toLowerCase() + ' #' + id;
+    if (classes) return el.tagName.toLowerCase() + ' .' + classes.split(' ')[0];
+    return el.tagName.toLowerCase();
+  }
+
+  function layerMeta(el, kind) {
+    if (!el || el.tagName === 'BODY') return 'Artboard';
+    var bits = [kind.charAt(0).toUpperCase() + kind.slice(1), '<' + el.tagName.toLowerCase() + '>'];
+    var style = el.style || {};
+    if (style.zIndex && style.zIndex !== 'auto') bits.push('z:' + style.zIndex);
+    return bits.join(' · ');
+  }
+
+  function makeModel(el, path) {
+    var kind = kindFor(el);
+    var model = {
+      path: pathKey(path),
+      kind: kind,
+      label: layerLabel(el, kind),
+      meta: layerMeta(el, kind),
+      nestable: isNestable(el),
+      id: el.id || '',
+      children: []
+    };
+    if (!el.children) return model;
+    for (var i = 0; i < el.children.length; i++) {
+      var child = el.children[i];
+      if (!isVisibleLayer(child)) continue;
+      model.children.push(makeModel(child, path.concat([i])));
+    }
+    return model;
+  }
+
+  function modelMatches(model, query) {
+    if (!query) return true;
+    var own = (model.label + ' ' + model.meta).toLowerCase().indexOf(query) >= 0;
+    if (own) return true;
+    for (var i = 0; i < model.children.length; i++) if (modelMatches(model.children[i], query)) return true;
+    return false;
+  }
+
+  function renderModel(model, depth, query, parent) {
+    if (!modelMatches(model, query)) return;
+    var branch = document.createElement('div');
+    branch.className = 'layer-branch';
+    branch.setAttribute('data-layer-path', model.path);
+
+    var row = document.createElement('div');
+    row.className = 'layer-row layer-kind-' + model.kind + (model.path === activePath || model.path === activeManualPath ? ' active' : '');
+    row.setAttribute('data-layer-path', model.path);
+    row.setAttribute('data-layer-kind', model.kind);
+    row.setAttribute('data-layer-nestable', model.nestable ? '1' : '0');
+    row.setAttribute('role', 'treeitem');
+    row.style.setProperty('--layer-depth', String(depth));
+    row.style.setProperty('--layer-indent-px', Math.min(Math.max(Number(depth || 0), 0) * 8, 48) + 'px');
+    row.title = model.path === 'body' ? 'Page artboard' : (model.label + ' — ' + model.meta + '. Drag to change stacking order or nesting. Explicit CSS z-index can override DOM paint order.');
+    row.addEventListener('pointerenter', function () {
+      if (dragState) return;
+      hoverPreviewPath(model.path);
+    });
+    row.addEventListener('pointerleave', function () {
+      if (dragState) return;
+      if (hoveredLayerPath === model.path) hoverPreviewPath('');
+    });
+
+
+    var hasChildren = model.children.length > 0;
+    var isCollapsed = !!collapsed[model.path];
+    var disclosure = document.createElement('button');
+    disclosure.type = 'button';
+    disclosure.className = 'layer-disclosure' + (hasChildren ? '' : ' empty');
+    disclosure.textContent = hasChildren ? (isCollapsed ? '›' : '⌄') : '';
+    disclosure.setAttribute('aria-label', isCollapsed ? 'Expand layer' : 'Collapse layer');
+    disclosure.addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (!hasChildren) return;
+      if (collapsed[model.path]) delete collapsed[model.path]; else collapsed[model.path] = true;
+      scheduleRefresh(0);
+    });
+
+    var dragHandle = document.createElement('button');
+    dragHandle.type = 'button';
+    dragHandle.className = 'layer-drag-handle';
+    dragHandle.textContent = '⠿';
+    dragHandle.title = model.path === 'body' ? 'Page root cannot be moved' : 'Drag layer';
+    dragHandle.disabled = model.path === 'body';
+    dragHandle.setAttribute('aria-label', 'Drag ' + model.label);
+    if (model.path !== 'body') dragHandle.addEventListener('pointerdown', beginDrag);
+
+    var icon = document.createElement('span');
+    icon.className = 'layer-type-icon';
+    icon.textContent = iconFor(model.kind);
+
+    var copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'layer-copy';
+    copy.innerHTML = '<span class="layer-name"></span><span class="layer-meta"></span>';
+    copy.querySelector('.layer-name').textContent = model.label;
+    copy.querySelector('.layer-meta').textContent = model.meta;
+    copy.addEventListener('click', function () {
+      activeManualPath = model.path;
+      canvasPathHint = '';
+      qsa('.layer-row.active', $('layersTree')).forEach(function (node) { node.classList.remove('active'); });
+      row.classList.add('active');
+      if (model.id && plus.scrollPreviewToHash) plus.scrollPreviewToHash(model.id);
+      else sendPreviewLayerMessage('NCE_LAYER_REVEAL_PATH', model.path);
+    });
+
+    row.appendChild(disclosure);
+    row.appendChild(dragHandle);
+    row.appendChild(icon);
+    row.appendChild(copy);
+    branch.appendChild(row);
+
+    if (hasChildren && !isCollapsed) {
+      var children = document.createElement('div');
+      children.className = 'layer-children';
+      children.setAttribute('role', 'group');
+      /* Reverse DOM sibling order intentionally: later DOM siblings normally paint
+         later, so the top of the Layers panel represents the visual front. */
+      for (var i = model.children.length - 1; i >= 0; i--) renderModel(model.children[i], depth + 1, query, children);
+      branch.appendChild(children);
+    }
+    parent.appendChild(branch);
+  }
+
+  function selectionPathFromSource(doc) {
+    var selection = plus.getSelection ? plus.getSelection() : null;
+    if (!selection) return '';
+    var target = null;
+    if (selection.id) target = doc.getElementById(selection.id);
+    if (!target && selection.path) {
+      try { target = doc.querySelector(selection.path); } catch (_) {}
+    }
+    return target ? structuralPath(target, doc.body) : '';
+  }
+
+  function refresh() {
+    var tree = $('layersTree');
+    var empty = $('layersEmptyState');
+    if (!tree) return;
+    tree.innerHTML = '';
+    if (!plus.hasPage()) {
+      if (empty) {
+        empty.textContent = 'Import or open a page to inspect its layer tree.';
+        empty.classList.remove('hidden');
+      }
+      return;
+    }
+    var source = readSource();
+    if (!source) {
+      if (empty) {
+        empty.textContent = 'The page is loaded, but Layers could not read its HTML source. Click Refresh Layers or reopen the page.';
+        empty.classList.remove('hidden');
+      }
+      console.warn('[HTML Studio] Layers: active page detected but source read returned empty.');
+      return;
+    }
+    var doc = parseSource(source);
+    if (!doc || !doc.body) {
+      if (empty) {
+        empty.textContent = 'Layers could not parse the active page.';
+        empty.classList.remove('hidden');
+      }
+      return;
+    }
+    activePath = canvasPathHint || selectionPathFromSource(doc);
+    if (activePath) expandAncestors(activePath);
+    var root = makeModel(doc.body, []);
+    var query = cleanText($('layerSearchInput') && $('layerSearchInput').value).toLowerCase();
+    renderModel(root, 0, query, tree);
+    if (tree.children.length) {
+      if (empty) empty.classList.add('hidden');
+    } else if (empty) {
+      empty.textContent = query ? 'No layers match your search.' : 'No visual layers were found on this page.';
+      empty.classList.remove('hidden');
+    }
+    if (pendingRevealPath) {
+      var revealPath = pendingRevealPath;
+      pendingRevealPath = '';
+      revealLayerRow(revealPath);
+    }
+  }
+
+  function scheduleRefresh(delay) {
+    window.clearTimeout(refreshTimer);
+    refreshTimer = window.setTimeout(refresh, typeof delay === 'number' ? delay : 100);
+  }
+
+  function clearDropState() {
+    qsa('.layer-row.layer-drop-above, .layer-row.layer-drop-below, .layer-row.layer-drop-inside').forEach(function (row) {
+      row.classList.remove('layer-drop-above', 'layer-drop-below', 'layer-drop-inside');
+    });
+    if (dragState && dragState.ghost && dragState.ghost.parentNode) dragState.ghost.parentNode.removeChild(dragState.ghost);
+  }
+
+  function beginDrag(event) {
+    if (event.button != null && event.button !== 0) return;
+    var row = event.currentTarget.closest('.layer-row');
+    if (!row || row.getAttribute('data-layer-path') === 'body') return;
+    event.preventDefault();
+    event.stopPropagation();
+    hoverPreviewPath('');
+    var ghost = document.createElement('div');
+    ghost.className = 'layer-drag-ghost';
+    ghost.textContent = cleanText(row.querySelector('.layer-name') && row.querySelector('.layer-name').textContent) || 'Layer';
+    document.body.appendChild(ghost);
+    dragState = {
+      pointerId: event.pointerId,
+      sourcePath: row.getAttribute('data-layer-path'),
+      targetPath: '',
+      mode: '',
+      ghost: ghost
+    };
+    positionGhost(event.clientX, event.clientY);
+    document.documentElement.classList.add('studio-layer-dragging');
+    window.addEventListener('pointermove', onDragMove, { passive: false });
+    window.addEventListener('pointerup', onDragEnd, { passive: false });
+    window.addEventListener('pointercancel', cancelDrag, { passive: false });
+  }
+
+  function positionGhost(x, y) {
+    if (!dragState || !dragState.ghost) return;
+    dragState.ghost.style.left = (x + 14) + 'px';
+    dragState.ghost.style.top = (y + 14) + 'px';
+  }
+
+  function dropModeFor(row, y) {
+    if (!row) return '';
+    var rect = row.getBoundingClientRect();
+    if (!rect.height) return '';
+    if (row.getAttribute('data-layer-path') === 'body') return 'inside';
+    var relative = (y - rect.top) / rect.height;
+    var nestable = row.getAttribute('data-layer-nestable') === '1';
+    if (nestable && relative >= 0.28 && relative <= 0.72) return 'inside';
+    return relative < 0.5 ? 'above' : 'below';
+  }
+
+  function onDragMove(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    event.preventDefault();
+    positionGhost(event.clientX, event.clientY);
+    qsa('.layer-row.layer-drop-above, .layer-row.layer-drop-below, .layer-row.layer-drop-inside').forEach(function (row) {
+      row.classList.remove('layer-drop-above', 'layer-drop-below', 'layer-drop-inside');
+    });
+    var hit = document.elementFromPoint(event.clientX, event.clientY);
+    var row = hit && hit.closest ? hit.closest('.layer-row') : null;
+    if (!row || !$('layersTree') || !$('layersTree').contains(row)) {
+      dragState.targetPath = '';
+      dragState.mode = '';
+      return;
+    }
+    var targetPath = row.getAttribute('data-layer-path');
+    if (!targetPath || targetPath === dragState.sourcePath) return;
+    var mode = dropModeFor(row, event.clientY);
+    dragState.targetPath = targetPath;
+    dragState.mode = mode;
+    row.classList.add('layer-drop-' + mode);
+  }
+
+  function cancelDrag(event) {
+    if (event && dragState && event.pointerId !== dragState.pointerId) return;
+    clearDropState();
+    dragState = null;
+    document.documentElement.classList.remove('studio-layer-dragging');
+    window.removeEventListener('pointermove', onDragMove, { passive: false });
+    window.removeEventListener('pointerup', onDragEnd, { passive: false });
+    window.removeEventListener('pointercancel', cancelDrag, { passive: false });
+  }
+
+  function moveLayer(sourcePath, targetPath, mode) {
+    var moved = plus.withSource(function (source) {
+      var doc = parseSource(source);
+      var sourceEl = resolvePath(doc, sourcePath);
+      var targetEl = resolvePath(doc, targetPath);
+      if (!sourceEl || !targetEl || sourceEl === doc.body) throw new Error('Layer could not be resolved.');
+      if (sourceEl === targetEl || sourceEl.contains(targetEl)) throw new Error('A layer cannot be moved inside itself or one of its descendants.');
+
+      if (mode === 'inside') {
+        if (!isNestable(targetEl)) throw new Error('Only Frames, Groups, and the page artboard can contain nested layers.');
+        targetEl.appendChild(sourceEl);
+      } else {
+        var parent = targetEl.parentNode;
+        if (!parent || parent.nodeType !== 1) throw new Error('The target layer cannot accept siblings.');
+        if (mode === 'above') {
+          /* Panel order is the reverse of DOM sibling order. Visual "above"
+             therefore means move after the target in the DOM. */
+          if (targetEl.nextSibling) parent.insertBefore(sourceEl, targetEl.nextSibling);
+          else parent.appendChild(sourceEl);
+        } else {
+          parent.insertBefore(sourceEl, targetEl);
+        }
+      }
+      return serializeSource(doc, source);
+    }, mode === 'inside' ? 'Layer nested.' : 'Layer order updated.');
+    if (moved && window.HTMLStudioProjects && window.HTMLStudioProjects.markDirty) window.HTMLStudioProjects.markDirty();
+    return moved;
+  }
+
+  function onDragEnd(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    event.preventDefault();
+    var sourcePath = dragState.sourcePath;
+    var targetPath = dragState.targetPath;
+    var mode = dragState.mode;
+    cancelDrag(event);
+    if (!targetPath || !mode) return;
+    try {
+      moveLayer(sourcePath, targetPath, mode);
+    } catch (error) {
+      console.error('[HTML Studio] Layer move failed:', error);
+      plus.toast(error.message || 'Layer could not be moved.', 'error');
+    }
+    activeManualPath = '';
+    canvasPathHint = '';
+    scheduleRefresh(180);
+  }
+
+  function setAllCollapsed(collapse) {
+    if (!collapse) collapsed = {};
+    else qsa('#layersTree .layer-branch[data-layer-path]').forEach(function (branch) {
+      var path = branch.getAttribute('data-layer-path');
+      if (path !== 'body' && branch.querySelector(':scope > .layer-children')) collapsed[path] = true;
+    });
+    scheduleRefresh(0);
+  }
+
+  function bind() {
+    var search = $('layerSearchInput');
+    if (search) search.addEventListener('input', function () { scheduleRefresh(70); });
+    var refreshBtn = $('refreshLayersBtn');
+    if (refreshBtn) refreshBtn.addEventListener('click', function () { scheduleRefresh(0); });
+    var expand = $('expandLayersBtn');
+    if (expand) expand.addEventListener('click', function () { setAllCollapsed(false); });
+    var collapse = $('collapseLayersBtn');
+    if (collapse) collapse.addEventListener('click', function () { setAllCollapsed(true); });
+
+    document.addEventListener('htmlstudio:plus-preview-ready', function () {
+      hoverPreviewPath('');
+      scheduleRefresh(80);
+    });
+    document.addEventListener('htmlstudio:plus-selection', function () {
+      activeManualPath = '';
+      pendingRevealPath = canvasPathHint || '';
+      scheduleRefresh(20);
+    });
+    document.addEventListener('htmlstudio:layers-refresh', function () { scheduleRefresh(0); });
+
+    window.addEventListener('message', function (event) {
+      var preview = $('previewFrame');
+      if (!preview || event.source !== preview.contentWindow) return;
+      var msg = event.data || {};
+      if (msg.source !== 'unscriptly-html-studio') return;
+      if (msg.type === 'NCE_LAYER_BRIDGE_READY') {
+        document.documentElement.setAttribute('data-html-studio-layer-runtime', 'ready');
+        return;
+      }
+      if (msg.type !== 'NCE_LAYER_SELECTED_PATH') return;
+      var path = String(msg.path || '');
+      if (!path) return;
+      canvasPathHint = path;
+      activePath = path;
+      activeManualPath = '';
+      expandAncestors(path);
+      pendingRevealPath = path;
+      scheduleRefresh(0);
+    });
+    var frame = $('previewFrame');
+    if (frame) frame.addEventListener('load', function () { scheduleRefresh(80); });
+    var shell = $('previewShell');
+    if (shell && window.MutationObserver) new MutationObserver(function () { scheduleRefresh(40); }).observe(shell, { attributes:true, attributeFilter:['class','data-device'] });
+    var currentPage = $('currentPageLabel');
+    if (currentPage && window.MutationObserver) new MutationObserver(function () { scheduleRefresh(40); }).observe(currentPage, { childList:true, subtree:true, characterData:true });
+    document.addEventListener('click', function (event) {
+      var tab = event.target && event.target.closest ? event.target.closest('[data-library-view="layers"]') : null;
+      if (tab) scheduleRefresh(20);
+    }, true);
+
+    var pageList = $('pageList');
+    if (pageList && window.MutationObserver) new MutationObserver(function () { scheduleRefresh(100); }).observe(pageList, { childList:true, subtree:true, characterData:true });
+  }
+
+  window.HTMLStudioLayers = {
+    refresh: refresh,
+    move: moveLayer,
+    getActivePath: function () { return activePath || activeManualPath || ''; },
+    hoverPath: hoverPreviewPath,
+    revealPath: function (path) { expandAncestors(path); pendingRevealPath = path; scheduleRefresh(0); }
+  };
+
+  try {
+    bind();
+    setStatus('ready');
+    scheduleRefresh(0);
+    window.setTimeout(function () {
+      if (!plus.hasPage()) return;
+      var tree = $('layersTree');
+      if (tree && !tree.children.length) {
+        console.warn('[HTML Studio] Layers initialized but the active page tree is still empty; forcing a resync.');
+        scheduleRefresh(0);
+      }
+    }, 500);
+  } catch (error) {
+    console.error('[HTML Studio] Layers module failed:', error);
+    setStatus('error');
+    plus.toast('Layers could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

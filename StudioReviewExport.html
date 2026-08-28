@@ -1,0 +1,259 @@
+<script>
+(function () {
+  'use strict';
+  var plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  var root = document.documentElement;
+  var WIREFRAME_RULES = [
+    "html{color-scheme:light!important;filter:none!important;background:#f2f2f0!important;}",
+    "html,body{background:#f2f2f0!important;}",
+    "html body{color:transparent!important;}",
+    "html body *{box-shadow:none!important;text-shadow:none!important;background-image:none!important;background-color:transparent!important;color:transparent!important;border-color:#cfcfca!important;outline-color:#cfcfca!important;}",
+    "html body *::before,html body *::after{color:transparent!important;text-shadow:none!important;box-shadow:none!important;background-image:none!important;}",
+    "html section,html article,html header,html footer,html nav,html aside,html main,html [data-unscriptly-frame=\"true\"],html [data-unscriptly-group=\"true\"]{background-color:#f8f8f6!important;}",
+    "html [class*=\"card\"],html [class*=\"panel\"],html [class*=\"tile\"],html [class*=\"surface\"],html fieldset{background-color:#fbfbfa!important;border-color:#d3d3ce!important;}",
+    "html h1,html h2,html h3,html h4,html h5,html h6{color:transparent!important;background-image:linear-gradient(#bfc0bc,#bfc0bc)!important;background-repeat:no-repeat!important;background-position:left center!important;border-color:transparent!important;}",
+    "html h1{background-size:min(78%,38rem) .72em!important;} html h2{background-size:min(68%,30rem) .68em!important;} html h3{background-size:min(58%,24rem) .64em!important;} html h4,html h5,html h6{background-size:min(48%,20rem) .58em!important;}",
+    "html p,html li,html dd,html dt,html blockquote,html figcaption{color:transparent!important;background-image:repeating-linear-gradient(to bottom,#d0d1cd 0 .54em,transparent .54em 1.45em)!important;background-size:94% 100%!important;background-repeat:no-repeat!important;background-position:left top!important;}",
+    "html label,html small,html th,html td,html a:not(.button):not([class*=\"btn\"]),html [data-unscriptly-skeleton-text=\"label\"]{color:transparent!important;background-image:linear-gradient(#d0d1cd,#d0d1cd)!important;background-repeat:no-repeat!important;background-position:left center!important;background-size:min(72%,14rem) .56em!important;}",
+    "html [data-unscriptly-skeleton-text=\"copy\"]{color:transparent!important;background-image:repeating-linear-gradient(to bottom,#d0d1cd 0 .52em,transparent .52em 1.38em)!important;background-size:90% 100%!important;background-repeat:no-repeat!important;background-position:left top!important;}",
+    "html button,html input,html select,html textarea,html [role=\"button\"],html .button,html [class*=\"btn\"]{color:transparent!important;background:#d4d5d1!important;border:1px solid #c2c3be!important;box-shadow:none!important;text-shadow:none!important;}",
+    "html input::placeholder,html textarea::placeholder{color:transparent!important;}",
+    "html img,html picture,html video,html canvas,html svg,html iframe,html object,html embed{filter:grayscale(1) contrast(0) brightness(1.62)!important;opacity:1!important;background:#d2d3cf!important;border-color:#c4c5c0!important;outline:1px solid #c4c5c0!important;outline-offset:-1px!important;box-shadow:none!important;}",
+    "html hr{border-color:#c8c9c4!important;background:#c8c9c4!important;}",
+    "html table{border-color:#cecfca!important;background:#fafaf8!important;} html tr,html thead,html tbody,html tfoot{background:transparent!important;} html th,html td{border-color:#d4d5d0!important;}",
+    "html progress,html meter{filter:grayscale(1) contrast(0) brightness(1.45)!important;}",
+    "html [data-unscriptly-note-pick]{cursor:crosshair!important;}"
+    ];
+  var WIREFRAME_STYLE = WIREFRAME_RULES.join('');
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector, base) { return Array.prototype.slice.call((base || document).querySelectorAll(selector)); }
+  function setStatus(value) { root.setAttribute('data-html-studio-review-export', value); }
+  function currentName() { return $('currentPageLabel') ? String($('currentPageLabel').textContent || 'page.html').trim() : 'page.html'; }
+  function pageNames() { return qsa('#pageList .page-item .page-name').map(function (node) { return String(node.textContent || '').trim(); }).filter(Boolean); }
+  function activatePage(name) {
+    var items = qsa('#pageList .page-item');
+    for (var i = 0; i < items.length; i++) {
+      var node = items[i].querySelector('.page-name');
+      if (node && String(node.textContent || '').trim() === name) { items[i].click(); return true; }
+    }
+    return false;
+  }
+  function readActiveSource() {
+    if (plus.readSource) return String(plus.readSource() || '');
+    var source = '';
+    plus.withSource(function (html) { source = String(html || ''); return html; }, '');
+    return source;
+  }
+  function collectSources(scope) {
+    if (window.HTMLStudioPng && HTMLStudioPng.collectSources) return HTMLStudioPng.collectSources(scope);
+    if (scope !== 'all') return [{ name: currentName(), html: readActiveSource() }];
+    var names = pageNames(), active = currentName(), pages = [];
+    names.forEach(function (name) { if (activatePage(name)) pages.push({ name: name, html: readActiveSource() }); });
+    if (active) activatePage(active);
+    return pages;
+  }
+
+  function markSkeletonStructure(doc) {
+    if (!doc || !doc.body) return;
+
+    var mediaSelector = 'img,picture,video,canvas,svg,iframe,object,embed';
+    qsa(mediaSelector, doc).forEach(function (el) {
+      el.setAttribute('data-unscriptly-skeleton-media', '1');
+    });
+
+    qsa('button,input,select,textarea,[role="button"],.button,[class*="btn"]', doc).forEach(function (el) {
+      el.setAttribute('data-unscriptly-skeleton-control', '1');
+    });
+
+    var headingTags = { h1:1,h2:1,h3:1,h4:1,h5:1,h6:1 };
+    var copyTags = { p:1,li:1,dd:1,dt:1,blockquote:1,figcaption:1 };
+    var labelTags = { label:1,small:1,th:1,td:1,a:1 };
+
+    qsa('body *', doc).forEach(function (el) {
+      var tag = String(el.tagName || '').toLowerCase();
+      if (!tag || tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'template') return;
+      if (headingTags[tag] || copyTags[tag] || labelTags[tag]) return;
+      if (el.matches && el.matches(mediaSelector + ',button,input,select,textarea,[role="button"]')) return;
+
+      var directText = '';
+      for (var i = 0; i < el.childNodes.length; i++) {
+        var node = el.childNodes[i];
+        if (node.nodeType === 3) directText += ' ' + String(node.nodeValue || '');
+      }
+      directText = directText.replace(/\s+/g, ' ').trim();
+      if (!directText) return;
+
+      var kind = directText.length <= 28 ? 'label' : 'copy';
+      el.setAttribute('data-unscriptly-skeleton-text', kind);
+    });
+
+    qsa('script', doc).forEach(function (script) {
+      script.setAttribute('data-unscriptly-original-type', script.getAttribute('type') || '');
+      script.setAttribute('type', 'application/x-unscriptly-wireframe-disabled');
+    });
+  }
+  function wireframeHtml(source) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(String(source || ''), 'text/html');
+    qsa('style[data-unscriptly-wireframe-export]', doc).forEach(function (node) { node.remove(); });
+    markSkeletonStructure(doc);
+    var style = doc.createElement('style');
+    style.setAttribute('data-unscriptly-wireframe-export', '1');
+    style.textContent = WIREFRAME_STYLE;
+    (doc.head || doc.documentElement).appendChild(style);
+    doc.documentElement.setAttribute('data-unscriptly-wireframe-export', 'skeleton');
+    var prefix = /^\s*<!doctype\s+html/i.test(String(source || '')) ? '<!DOCTYPE html>\n' : '';
+    return prefix + doc.documentElement.outerHTML;
+  }
+  function comparisonSource(source, wire) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(String(source || ''), 'text/html');
+    qsa('meta[http-equiv]', doc).forEach(function (meta) {
+      if (String(meta.getAttribute('http-equiv') || '').toLowerCase() === 'content-security-policy') meta.remove();
+    });
+    if (wire) {
+      markSkeletonStructure(doc);
+      var style = doc.createElement('style');
+      style.setAttribute('data-unscriptly-wireframe-export', '1');
+      style.textContent = WIREFRAME_STYLE;
+      (doc.head || doc.documentElement).appendChild(style);
+      doc.documentElement.setAttribute('data-unscriptly-wireframe-export', 'skeleton');
+    }
+    var prefix = /^\s*<!doctype\s+html/i.test(String(source || '')) ? '<!DOCTYPE html>\n' : '';
+    return prefix + doc.documentElement.outerHTML;
+  }
+  function htmlName(name, suffix) {
+    var stem = String(name || 'page').replace(/\.(?:html?|txt)$/i, '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'page';
+    return stem + (suffix || '') + '.html';
+  }
+  function pngName(name, suffix) {
+    var stem = String(name || 'page').replace(/\.(?:html?|txt)$/i, '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'page';
+    return stem + (suffix || '') + '.png';
+  }
+  function downloadBlob(blob, filename) {
+    if (window.HTMLStudioPng && HTMLStudioPng.downloadBlob) return HTMLStudioPng.downloadBlob(blob, filename);
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename; a.style.display = 'none'; document.body.appendChild(a); a.click();
+    window.setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1500);
+  }
+  function closeExportModal() { if ($('exportModal')) $('exportModal').classList.add('hidden'); }
+  function serverZip(pages) {
+    return new Promise(function (resolve, reject) {
+      if (!(window.google && google.script && google.script.run)) return reject(new Error('ZIP export requires the deployed Apps Script web app.'));
+      google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).exportPagesZip(pages);
+    });
+  }
+  function downloadServerResult(result) {
+    var raw = atob(result.base64 || '');
+    var bytes = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    downloadBlob(new Blob([bytes], { type: result.mimeType || 'application/zip' }), result.name || 'unscriptly-export.zip');
+  }
+
+  function exportWireframeCurrent() {
+    var pages = collectSources('current');
+    if (!pages.length || !pages[0].html) return plus.toast('No page is available to export.', 'error');
+    downloadBlob(new Blob([wireframeHtml(pages[0].html)], { type: 'text/html;charset=utf-8' }), htmlName(pages[0].name, '-wireframe'));
+    closeExportModal();
+    plus.toast('Wireframe HTML exported.');
+  }
+  function exportWireframeAll() {
+    var pages = collectSources('all').map(function (page) { return { name: htmlName(page.name, '-wireframe'), html: wireframeHtml(page.html) }; });
+    if (!pages.length) return plus.toast('No pages are available to export.', 'error');
+    serverZip(pages).then(downloadServerResult).then(function () { closeExportModal(); plus.toast('Wireframe pages exported as ZIP.'); }).catch(function (error) { plus.toast(String(error && error.message || error), 'error'); });
+  }
+  function exportWireframePng() {
+    if (!(window.HTMLStudioPng && HTMLStudioPng.renderHtmlToBlob)) return plus.toast('PNG renderer is unavailable. HTML wireframe export remains available.', 'error');
+    var pages = collectSources('current');
+    if (!pages.length || !pages[0].html) return plus.toast('No page is available to export.', 'error');
+    var width = Math.max(390, Math.round(($('canvasStage') && $('canvasStage').clientWidth) || 1440));
+    closeExportModal();
+    plus.toast('Rendering wireframe PNG…');
+    HTMLStudioPng.renderHtmlToBlob(wireframeHtml(pages[0].html), width, 1).then(function (blob) {
+      downloadBlob(blob, pngName(pages[0].name, '-wireframe'));
+      plus.toast('Wireframe PNG exported.');
+    }).catch(function (error) { plus.toast('Wireframe PNG failed: ' + String(error && error.message || error), 'error'); });
+  }
+
+  function jsonForScript(value) { return JSON.stringify(value).replace(/</g, '\\u003c').replace(/-->/g, '--\\>'); }
+  function buildComparisonWidget(page, includeNotes) {
+    var hifi = comparisonSource(page.html, false);
+    var wire = comparisonSource(page.html, true);
+    var notes = includeNotes && window.HTMLStudioReview ? HTMLStudioReview.getNotesForPage(page.name) : [];
+    var title = String(page.name || 'Page').replace(/\.html?$/i, '');
+    var data = jsonForScript({ hifi: hifi, wire: wire, notes: notes, title: title });
+    return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escapeHtml(title) + ' · Wireframe to Hi-Fi</title>' +
+      '<style>' + widgetCss() + '</style></head><body>' +
+      '<header class="bar"><div><strong>' + escapeHtml(title) + '</strong><span>Skeleton Wireframe → Hi-Fi review</span></div><div class="legend"><b>Wireframe</b><input id="split" type="range" min="0" max="100" value="50" aria-label="Comparison reveal"><b>Hi-Fi</b>' + (includeNotes ? '<label><input id="notesToggle" type="checkbox" checked> Notes</label>' : '') + '</div></header>' +
+      '<main class="stage" id="stage"><iframe id="hifi" title="Hi-Fi" sandbox="allow-same-origin allow-forms"></iframe><div class="wire-layer" id="wireLayer"><iframe id="wire" title="Wireframe" sandbox="allow-same-origin allow-forms"></iframe></div><div class="divider" id="divider"></div><div class="notes" id="notes"></div><div class="note-card hidden" id="noteCard"><button id="noteClose">×</button><span id="noteStatus"></span><strong id="noteTitle"></strong><p id="noteBody"></p></div></main>' +
+      '<footer>Exported from UnScriptly™ HTML Studio · Drag the comparison control to move between low-fidelity skeleton structure and final visual design.</footer>' +
+      '<script id="reviewData" type="application/json">' + data + '<\/script><script>' + widgetJs() + '<\/script></body></html>';
+  }
+  function escapeHtml(value) { return String(value || '').replace(/[&<>"']/g, function (ch) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]; }); }
+  function widgetCss() {
+    return '*{box-sizing:border-box}html,body{margin:0;height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#e9e9e7;color:#111}.bar{height:64px;padding:10px 18px;display:flex;align-items:center;justify-content:space-between;gap:18px;background:#fff;border-bottom:1px solid #d4d4d0}.bar>div:first-child{display:grid;gap:2px}.bar strong{font-size:14px}.bar span{font-size:10px;color:#777}.legend{display:flex;align-items:center;gap:10px;font-size:10px;white-space:nowrap}.legend input[type=range]{width:min(260px,30vw)}.legend label{display:flex;gap:5px;align-items:center}.stage{position:relative;height:calc(100vh - 94px);min-height:420px;overflow:hidden;background:#d8d8d5}.stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}.wire-layer{position:absolute;inset:0 auto 0 0;width:50%;overflow:hidden;z-index:2}.wire-layer iframe{left:0;top:0}.divider{position:absolute;z-index:4;top:0;bottom:0;left:50%;width:2px;background:#111;pointer-events:none}.divider:before{content:"↔";position:absolute;top:18px;left:50%;transform:translateX(-50%);width:30px;height:30px;border-radius:999px;background:#111;color:#fff;display:grid;place-items:center;font-size:12px}.notes{position:absolute;inset:0;z-index:5;pointer-events:none}.pin{position:absolute;transform:translate(-50%,-50%);width:26px;height:26px;border:2px solid #fff;border-radius:50%;background:#111;color:#fff;box-shadow:0 3px 14px #0003;font:800 10px/1 system-ui;pointer-events:auto;cursor:pointer}.pin.resolved{background:#777}.note-card{position:absolute;z-index:8;right:18px;top:18px;width:min(320px,calc(100% - 36px));padding:16px;background:#fff;border:1px solid #bbb;border-radius:12px;box-shadow:0 16px 50px #0003;display:grid;gap:7px}.note-card.hidden{display:none}.note-card button{position:absolute;right:8px;top:8px;border:0;background:transparent;font-size:20px;cursor:pointer}.note-card span{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#777}.note-card strong{font-size:14px}.note-card p{margin:0;font-size:12px;line-height:1.5;color:#444;white-space:pre-wrap}footer{height:30px;padding:8px 18px;background:#fff;border-top:1px solid #d4d4d0;color:#777;font-size:9px}@media(max-width:720px){.bar{height:auto;min-height:74px;align-items:flex-start;flex-direction:column}.legend{width:100%}.legend input[type=range]{flex:1;width:auto}.stage{height:calc(100vh - 120px)}footer{display:none}}';
+  }
+  function widgetJs() {
+    return '(function(){"use strict";var d=JSON.parse(document.getElementById("reviewData").textContent||"{}");var stage=document.getElementById("stage"),h=document.getElementById("hifi"),w=document.getElementById("wire"),layer=document.getElementById("wireLayer"),divider=document.getElementById("divider"),slider=document.getElementById("split"),notesEl=document.getElementById("notes"),card=document.getElementById("noteCard");h.srcdoc=d.hifi||"";w.srcdoc=d.wire||"";function size(){var px=stage.clientWidth+"px";h.style.width=px;w.style.width=px;renderNotes()}function reveal(){var v=Number(slider.value||50);layer.style.width=v+"%";divider.style.left=v+"%"}slider.addEventListener("input",reveal);window.addEventListener("resize",size);var syncing=false;function sync(a,b){if(syncing)return;syncing=true;try{b.contentWindow.scrollTo(a.contentWindow.scrollX,a.contentWindow.scrollY)}catch(e){}setTimeout(function(){syncing=false;renderNotes()},0)}function pathArray(v){if(!v||v==="body")return[];return String(v).split(".").filter(Boolean).map(function(x){return parseInt(x,10)})}function resolve(doc,p){var n=doc&&doc.body,parts=pathArray(p);for(var i=0;i<parts.length;i++){if(!n||!n.children||!n.children[parts[i]])return null;n=n.children[parts[i]]}return n}function openNote(note){document.getElementById("noteStatus").textContent=note.status==="resolved"?"Resolved note":"Editor note";document.getElementById("noteTitle").textContent=note.title||"Editor note";document.getElementById("noteBody").textContent=note.body||"";card.classList.remove("hidden")}document.getElementById("noteClose").onclick=function(){card.classList.add("hidden")};function renderNotes(){notesEl.innerHTML="";var toggle=document.getElementById("notesToggle");if(toggle&&!toggle.checked)return;var doc;try{doc=h.contentDocument}catch(e){return}(d.notes||[]).forEach(function(note,index){var el=resolve(doc,note.path);if(!el)return;var r=el.getBoundingClientRect(),pin=document.createElement("button");pin.className="pin"+(note.status==="resolved"?" resolved":"");pin.textContent=String(index+1);pin.style.left=Math.max(14,Math.min(stage.clientWidth-14,r.x+r.width-4))+"px";pin.style.top=Math.max(14,Math.min(stage.clientHeight-14,r.y+4))+"px";pin.onclick=function(){openNote(note)};notesEl.appendChild(pin)})}function ready(){size();reveal();try{h.contentWindow.addEventListener("scroll",function(){sync(h,w);renderNotes()},{passive:true});w.contentWindow.addEventListener("scroll",function(){sync(w,h)},{passive:true})}catch(e){}renderNotes()}var loaded=0;function onload(){loaded++;if(loaded>=2)ready()}h.onload=onload;w.onload=onload;var nt=document.getElementById("notesToggle");if(nt)nt.addEventListener("change",renderNotes)})();';
+  }
+
+  function openCompareModal() {
+    if (!plus.hasPage()) return plus.toast('Import or open a page before exporting a comparison widget.', 'error');
+    closeExportModal();
+    if ($('compareExportModal')) $('compareExportModal').classList.remove('hidden');
+  }
+  function exportCompareWidget() {
+    var button = $('compareExportConfirmBtn');
+    var scope = $('compareScopeInput') ? $('compareScopeInput').value : 'current';
+    var includeNotes = !$('compareIncludeNotesInput') || $('compareIncludeNotesInput').checked;
+    var pages = collectSources(scope);
+    if (!pages.length) return plus.toast('No pages are available to export.', 'error');
+    if (button) { button.disabled = true; button.textContent = 'Building…'; }
+    try {
+      var outputs = pages.map(function (page) { return { name: htmlName(page.name, '-wireframe-to-hifi'), html: buildComparisonWidget(page, includeNotes) }; });
+      if (scope === 'current') {
+        downloadBlob(new Blob([outputs[0].html], { type: 'text/html;charset=utf-8' }), outputs[0].name);
+        if ($('compareExportModal')) $('compareExportModal').classList.add('hidden');
+        plus.toast('Interactive before/after widget exported.');
+        if (button) { button.disabled = false; button.textContent = 'Export widget'; }
+        return;
+      }
+      serverZip(outputs).then(downloadServerResult).then(function () {
+        if ($('compareExportModal')) $('compareExportModal').classList.add('hidden');
+        plus.toast('Interactive comparison widgets exported as ZIP.');
+      }).catch(function (error) { plus.toast(String(error && error.message || error), 'error'); }).then(function () { if (button) { button.disabled = false; button.textContent = 'Export widget'; } });
+    } catch (error) {
+      if (button) { button.disabled = false; button.textContent = 'Export widget'; }
+      plus.toast('Comparison widget could not be built: ' + String(error && error.message || error), 'error');
+    }
+  }
+
+  function bind() {
+    if ($('exportWireframeCurrentBtn')) $('exportWireframeCurrentBtn').addEventListener('click', exportWireframeCurrent);
+    if ($('exportWireframeAllBtn')) $('exportWireframeAllBtn').addEventListener('click', exportWireframeAll);
+    if ($('exportWireframePngBtn')) $('exportWireframePngBtn').addEventListener('click', exportWireframePng);
+    if ($('exportCompareWidgetBtn')) $('exportCompareWidgetBtn').addEventListener('click', openCompareModal);
+    if ($('compareExportConfirmBtn')) $('compareExportConfirmBtn').addEventListener('click', exportCompareWidget);
+    if ($('compareExportCancelBtn')) $('compareExportCancelBtn').addEventListener('click', function () { if ($('compareExportModal')) $('compareExportModal').classList.add('hidden'); });
+    if ($('compareExportCloseBtn')) $('compareExportCloseBtn').addEventListener('click', function () { if ($('compareExportModal')) $('compareExportModal').classList.add('hidden'); });
+  }
+
+  window.HTMLStudioReviewExport = {
+    wireframeHtml: wireframeHtml,
+    buildComparisonWidget: buildComparisonWidget,
+    exportWireframeCurrent: exportWireframeCurrent,
+    exportCompare: openCompareModal
+  };
+
+  try { bind(); setStatus('ready'); }
+  catch (error) {
+    console.error('[HTML Studio] Review export module failed:', error);
+    setStatus('error');
+    plus.toast('Wireframe review export tools could not initialize. Standard export remains available.', 'error');
+  }
+})();
+</script>

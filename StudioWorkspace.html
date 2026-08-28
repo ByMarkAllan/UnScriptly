@@ -1,0 +1,38 @@
+<script>
+(function () {
+  'use strict';
+  if (!window.HTMLStudioPlus) return;
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); }
+  function show(view) {
+    qsa('.library-tab').forEach(function (tab) {
+      var active = tab.getAttribute('data-library-view') === view;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    var notesLauncher = document.getElementById('notesLauncherBtn');
+    if (notesLauncher) {
+      notesLauncher.classList.toggle('active', view === 'notes');
+      notesLauncher.setAttribute('aria-pressed', view === 'notes' ? 'true' : 'false');
+    }
+    var addPage = document.getElementById('addPageBtn');
+    if (addPage) addPage.classList.toggle('hidden', view !== 'pages');
+    qsa('[data-library-panel]').forEach(function (panel) {
+      panel.classList.toggle('hidden', panel.getAttribute('data-library-panel') !== view);
+    });
+    var title = $('libraryPanelTitle');
+    if (title) title.textContent = view === 'layers' ? 'Layers' : view === 'elements' ? 'Elements' : view === 'media' ? 'Media' : view === 'notes' ? 'Notes' : 'Pages';
+    var add = $('addPageBtn');
+    if (add) add.classList.toggle('hidden', view !== 'pages');
+  }
+  try {
+    qsa('.library-tab').forEach(function (tab) { tab.addEventListener('click', function () { show(tab.getAttribute('data-library-view')); }); });
+    var notesLauncher = document.getElementById('notesLauncherBtn');
+    if (notesLauncher) notesLauncher.addEventListener('click', function () { show('notes'); });
+    document.documentElement.setAttribute('data-html-studio-workspace', 'ready');
+  } catch (error) {
+    document.documentElement.setAttribute('data-html-studio-workspace', 'error');
+    console.error('[HTML Studio] Workspace extension failed:', error);
+  }
+})();
+</script>

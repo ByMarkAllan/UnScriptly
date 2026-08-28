@@ -1,0 +1,168 @@
+<script>
+(function () {
+  'use strict';
+  if (!window.HTMLStudioPlus) return;
+
+  var html = document.documentElement;
+  var previousMode = 'select';
+
+  function $(id) { return document.getElementById(id); }
+  function isMobileLayout() { return window.matchMedia && window.matchMedia('(max-width: 900px)').matches; }
+  function setStatus(value) { html.setAttribute('data-html-studio-chrome', value); }
+
+  function syncCanvasLayout() {
+    var workspace = document.querySelector('.workspace');
+    var stage = $('canvasStage');
+    var scrollLeft = stage ? stage.scrollLeft : 0;
+    var scrollTop = stage ? stage.scrollTop : 0;
+    window.requestAnimationFrame(function () {
+      if (workspace) void workspace.offsetWidth;
+      if (stage) { stage.scrollLeft = scrollLeft; stage.scrollTop = scrollTop; }
+    });
+  }
+
+  function setLeftCollapsed(collapsed) {
+    if (isMobileLayout()) return;
+    html.classList.toggle('studio-left-collapsed', !!collapsed);
+    var toggle = $('pagesToggleBtn');
+    if (toggle) toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    syncCanvasLayout();
+  }
+
+  function setInspectorCollapsed(collapsed) {
+    if (isMobileLayout()) return;
+    html.classList.toggle('studio-inspector-collapsed', !!collapsed);
+    var reopen = $('inspectorReopenBtn');
+    if (reopen) reopen.setAttribute('aria-hidden', collapsed ? 'false' : 'true');
+    syncCanvasLayout();
+  }
+
+  function openSettings() {
+    var modal = $('settingsModal');
+    if (modal) modal.classList.remove('hidden');
+  }
+
+  function closeSettings() {
+    var modal = $('settingsModal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  function enterPreview() {
+    if (!window.HTMLStudioPlus.hasPage()) {
+      window.HTMLStudioPlus.toast('Import or create a page before opening Preview.', 'error');
+      return;
+    }
+    if (html.classList.contains('studio-preview-mode')) return;
+    previousMode = $('interactModeBtn') && $('interactModeBtn').classList.contains('active') ? 'interact' : 'select';
+    if ($('interactModeBtn')) $('interactModeBtn').click();
+    html.classList.add('studio-preview-mode');
+    var bar = $('previewModeBar');
+    if (bar) bar.classList.remove('hidden');
+    updatePreviewLabel();
+  }
+
+  function exitPreview() {
+    if (!html.classList.contains('studio-preview-mode')) return;
+    html.classList.remove('studio-preview-mode');
+    var bar = $('previewModeBar');
+    if (bar) bar.classList.add('hidden');
+    if (previousMode === 'select' && $('selectModeBtn')) $('selectModeBtn').click();
+  }
+
+  function updatePreviewLabel() {
+    var source = $('currentPageLabel');
+    var target = $('previewModePageName');
+    if (source && target) target.textContent = source.textContent || 'Preview';
+  }
+
+  function installPanelControls() {
+    var pages = $('pagesToggleBtn');
+    if (pages) {
+      pages.setAttribute('aria-expanded', 'true');
+      pages.addEventListener('click', function () {
+        if (!isMobileLayout()) {
+          /* The immutable v1 core treats this as a mobile drawer trigger.
+             Clear those mobile-only side effects before applying desktop collapse. */
+          if ($('leftPanel')) $('leftPanel').classList.remove('open');
+          if ($('inspectorPanel')) $('inspectorPanel').classList.remove('open');
+          if ($('drawerBackdrop') && !($('codeDrawer') && $('codeDrawer').classList.contains('open'))) $('drawerBackdrop').classList.add('hidden');
+          setLeftCollapsed(!html.classList.contains('studio-left-collapsed'));
+        }
+      });
+    }
+
+    var leftReopen = $('workspaceReopenBtn');
+    if (leftReopen) leftReopen.addEventListener('click', function () {
+      if (isMobileLayout()) {
+        if ($('pagesToggleBtn')) $('pagesToggleBtn').click();
+      } else setLeftCollapsed(false);
+    });
+
+    var inspectorClose = $('inspectorCloseBtn');
+    if (inspectorClose) inspectorClose.addEventListener('click', function () {
+      if (!isMobileLayout()) setInspectorCollapsed(true);
+    });
+
+    var inspectorReopen = $('inspectorReopenBtn');
+    if (inspectorReopen) inspectorReopen.addEventListener('click', function () {
+      if (isMobileLayout()) {
+        if ($('inspectorToggleBtn')) $('inspectorToggleBtn').click();
+      } else setInspectorCollapsed(false);
+    });
+
+    window.addEventListener('resize', function () {
+      if (isMobileLayout()) {
+        html.classList.remove('studio-left-collapsed');
+        html.classList.remove('studio-inspector-collapsed');
+      }
+    });
+  }
+
+  function installSettings() {
+    if ($('settingsBtn')) $('settingsBtn').addEventListener('click', openSettings);
+    if ($('settingsCloseBtn')) $('settingsCloseBtn').addEventListener('click', closeSettings);
+    var grid = $('showCanvasGridInput');
+    if (grid) {
+      var stored = null;
+      try { stored = localStorage.getItem('htmlStudio.showGrid'); } catch (_) {}
+      if (stored === '0') grid.checked = false;
+      html.classList.toggle('studio-hide-grid', !grid.checked);
+      grid.addEventListener('change', function () {
+        html.classList.toggle('studio-hide-grid', !grid.checked);
+        try { localStorage.setItem('htmlStudio.showGrid', grid.checked ? '1' : '0'); } catch (_) {}
+      });
+    }
+  }
+
+  function installPreview() {
+    if ($('previewModeBtn')) $('previewModeBtn').addEventListener('click', enterPreview);
+    if ($('previewExitBtn')) $('previewExitBtn').addEventListener('click', exitPreview);
+    var label = $('currentPageLabel');
+    if (label && window.MutationObserver) new MutationObserver(updatePreviewLabel).observe(label, { childList: true, characterData: true, subtree: true });
+    window.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      if (html.classList.contains('studio-preview-mode')) {
+        event.preventDefault();
+        exitPreview();
+        return;
+      }
+      if ($('settingsModal') && !$('settingsModal').classList.contains('hidden')) { $('settingsModal').classList.add('hidden'); return; }
+      if ($('pngModal') && !$('pngModal').classList.contains('hidden')) { $('pngModal').classList.add('hidden'); return; }
+    }, true);
+  }
+
+  function init() {
+    installPanelControls();
+    installSettings();
+    installPreview();
+    setStatus('ready');
+  }
+
+  try { init(); }
+  catch (error) {
+    console.error('[HTML Studio] Chrome module failed:', error);
+    setStatus('error');
+    window.HTMLStudioPlus.toast('Workspace controls could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

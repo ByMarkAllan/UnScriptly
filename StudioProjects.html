@@ -1,0 +1,641 @@
+<script>
+(function () {
+  'use strict';
+
+  var plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  var config = window.__HTML_STUDIO_CONFIG || {};
+  var current = {
+    id: String(config.projectId || ''),
+    name: 'Untitled Project',
+    driveUrl: '',
+    updatedAt: '',
+    dirty: false,
+    saving: false,
+    loading: false,
+    imageAssetCount: 0
+  };
+  var projectRows = [];
+  var openMenu = null;
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
+  function setModuleStatus(value) { document.documentElement.setAttribute('data-html-studio-projects', value); }
+
+  function server(method, args) {
+    args = args || [];
+    return new Promise(function (resolve, reject) {
+      if (!(window.google && google.script && google.script.run)) {
+        reject(new Error('Google Drive project storage is only available from the deployed Apps Script web app.'));
+        return;
+      }
+      var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (error) {
+        reject(new Error(String(error && error.message || error || 'Apps Script request failed.')));
+      });
+      try {
+        if (method === 'list') runner.htmlStudioListProjects();
+        else if (method === 'get') runner.htmlStudioGetProject(args[0]);
+        else if (method === 'loadPage') runner.htmlStudioLoadProjectPage(args[0], args[1]);
+        else if (method === 'beginSave') runner.htmlStudioBeginProjectSave(args[0]);
+        else if (method === 'savePage') runner.htmlStudioSaveProjectPage(args[0], args[1], args[2]);
+        else if (method === 'finalizeSave') runner.htmlStudioFinalizeProjectSave(args[0], args[1]);
+        else if (method === 'rename') runner.htmlStudioRenameProject(args[0], args[1]);
+        else if (method === 'delete') runner.htmlStudioDeleteProject(args[0]);
+        else if (method === 'storage') runner.htmlStudioGetProjectStorageInfo();
+        else if (method === 'archiveImage') runner.htmlStudioArchiveProjectImage(args[0], args[1]);
+        else reject(new Error('Unknown project request: ' + method));
+      } catch (error) { reject(error); }
+    });
+  }
+
+  function setText(id, value) {
+    var node = $(id);
+    if (node) node.textContent = value;
+  }
+
+  function formatDate(value) {
+    if (!value) return '';
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return '';
+    try {
+      return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date);
+    } catch (_) { return date.toLocaleString(); }
+  }
+
+  function projectStatusText() {
+    if (current.loading) return 'Loading from Google Drive…';
+    if (current.saving) return 'Saving to Google Drive…';
+    if (current.dirty) return current.id ? 'Unsaved changes' : 'Not saved to Drive';
+    if (current.id) return current.updatedAt ? 'Saved · ' + formatDate(current.updatedAt) : 'Saved to Google Drive';
+    return 'Not saved to Drive';
+  }
+
+  function renderCurrentProject() {
+    setText('currentProjectName', current.name || 'Untitled Project');
+    setText('projectModalCurrentName', current.name || 'Untitled Project');
+    var status = projectStatusText();
+    setText('projectSaveStatus', status);
+    setText('projectModalCurrentStatus', status);
+    var statusNode = $('projectSaveStatus');
+    if (statusNode) {
+      statusNode.classList.toggle('dirty', current.dirty && !current.saving);
+      statusNode.classList.toggle('saved', !!current.id && !current.dirty && !current.saving && !current.loading);
+      statusNode.classList.toggle('error', false);
+    }
+    var assetStatus = $('projectAssetStatus');
+    if (assetStatus && !current.saving) {
+      assetStatus.textContent = current.imageAssetCount
+        ? current.imageAssetCount + ' remote image' + (current.imageAssetCount === 1 ? '' : 's') + ' archived in Drive.'
+        : 'No archived image assets yet.';
+    }
+    var saveButtons = [$('projectQuickSaveBtn'), $('projectModalSaveBtn')];
+    saveButtons.forEach(function (button) {
+      if (!button) return;
+      button.disabled = current.saving || current.loading;
+      button.classList.toggle('saving', current.saving);
+      button.textContent = current.saving ? 'Saving…' : 'Save';
+    });
+  }
+
+  function markDirty() {
+    if (current.loading || current.saving) return;
+    if (!plus.hasPage()) return;
+    current.dirty = true;
+    renderCurrentProject();
+  }
+
+  function openModal() {
+    var modal = $('projectsModal');
+    if (modal) modal.classList.remove('hidden');
+    hideSaveAs();
+    renderCurrentProject();
+    refreshProjectList();
+  }
+
+  function closeModal() {
+    var modal = $('projectsModal');
+    if (modal) modal.classList.add('hidden');
+    closeProjectMenu();
+  }
+
+  function showSaveAs(suggested) {
+    var panel = $('projectSaveAsPanel');
+    var input = $('projectNameInput');
+    if (panel) panel.classList.remove('hidden');
+    if (input) {
+      input.value = suggested || current.name || 'Untitled Project';
+      window.setTimeout(function () { input.focus(); input.select(); }, 0);
+    }
+  }
+
+  function hideSaveAs() {
+    var panel = $('projectSaveAsPanel');
+    if (panel) panel.classList.add('hidden');
+  }
+
+  function activePageName() {
+    var label = $('currentPageLabel');
+    return label ? String(label.textContent || '').trim() : '';
+  }
+
+  function pageNames() {
+    return qsa('#pageList .page-item .page-name').map(function (node) { return String(node.textContent || '').trim(); }).filter(Boolean);
+  }
+
+  function activatePage(name) {
+    var rows = qsa('#pageList .page-item');
+    for (var i = 0; i < rows.length; i++) {
+      var node = rows[i].querySelector('.page-name');
+      if (node && String(node.textContent || '').trim() === name) {
+        rows[i].click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function readCurrentSource() {
+    var source = '';
+    plus.withSource(function (html) {
+      source = String(html || '');
+      return html;
+    });
+    return source;
+  }
+
+  function collectWorkspacePages() {
+    var names = pageNames();
+    var restoreName = activePageName();
+    var pages = [];
+    names.forEach(function (name) {
+      activatePage(name);
+      pages.push({ name: name, html: readCurrentSource() });
+    });
+    if (restoreName) activatePage(restoreName);
+    return { pages: pages, activePage: restoreName || (names[0] || '') };
+  }
+
+  function importPageIntoCore(page) {
+    var nameInput = $('pastePageName');
+    var htmlInput = $('pasteHtmlInput');
+    var importButton = $('importPasteBtn');
+    if (!nameInput || !htmlInput || !importButton) throw new Error('The v1 import controls are unavailable.');
+    nameInput.value = page.name || 'index.html';
+    htmlInput.value = page.html || '';
+    importButton.click();
+  }
+
+  function isRemoteHttpUrl(value) {
+    return /^https?:\/\//i.test(String(value || '').trim());
+  }
+
+  function imageFilenameFromUrl(url, fallback) {
+    try {
+      var parsed = new URL(url, window.location.href);
+      var pathname = decodeURIComponent(parsed.pathname || '');
+      var last = pathname.split('/').filter(Boolean).pop() || '';
+      last = last.replace(/[\\/:*?"<>|]+/g, '-').trim();
+      if (last && /\.[a-z0-9]{2,6}$/i.test(last)) return last.slice(0, 120);
+    } catch (_) {}
+    return (fallback || 'remote-image') + '.img';
+  }
+
+  function collectRemoteImages(pages) {
+    var found = {};
+    var results = [];
+
+    function add(url, pageName, suggestedName) {
+      url = String(url || '').trim().replace(/^['"]|['"]$/g, '');
+      if (!isRemoteHttpUrl(url)) return;
+      var key = url.toLowerCase();
+      if (found[key]) {
+        if (pageName && found[key].pageNames.indexOf(pageName) < 0) found[key].pageNames.push(pageName);
+        return;
+      }
+      var item = {
+        url: url,
+        suggestedName: imageFilenameFromUrl(url, suggestedName || 'remote-image'),
+        pageNames: pageName ? [pageName] : []
+      };
+      found[key] = item;
+      results.push(item);
+    }
+
+    (pages || []).forEach(function (page) {
+      var html = String(page && page.html || '');
+      var name = String(page && page.name || 'page.html');
+      var doc;
+      try { doc = new DOMParser().parseFromString(html, 'text/html'); } catch (_) { doc = null; }
+      if (doc) {
+        qsa('img[src],input[type="image"][src],source[src],video[poster]', doc).forEach(function (node, index) {
+          add(node.getAttribute(node.tagName === 'VIDEO' ? 'poster' : 'src'), name, 'image-' + (index + 1));
+        });
+        qsa('img[srcset],source[srcset]', doc).forEach(function (node) {
+          String(node.getAttribute('srcset') || '').split(',').forEach(function (entry) {
+            add(String(entry || '').trim().split(/\s+/)[0], name, 'responsive-image');
+          });
+        });
+        qsa('svg image[href],svg image[xlink\\:href]', doc).forEach(function (node) {
+          add(node.getAttribute('href') || node.getAttribute('xlink:href'), name, 'svg-image');
+        });
+        qsa('meta[property="og:image"],meta[name="twitter:image"]', doc).forEach(function (node) {
+          add(node.getAttribute('content'), name, 'social-image');
+        });
+        qsa('[style*="background"]', doc).forEach(function (node) {
+          var style = String(node.getAttribute('style') || '');
+          var re = /background(?:-image)?\s*:[^;]*?url\(\s*(['"]?)(https?:\/\/[^)'"\s]+)\1\s*\)/ig;
+          var match;
+          while ((match = re.exec(style))) add(match[2], name, 'background-image');
+        });
+      }
+      var styleRe = /background(?:-image)?\s*:[^;}]*?url\(\s*(['"]?)(https?:\/\/[^)'"\s]+)\1\s*\)/ig;
+      var cssMatch;
+      while ((cssMatch = styleRe.exec(html))) add(cssMatch[2], name, 'background-image');
+    });
+    return results;
+  }
+
+  async function archiveProjectImages(projectId, pages) {
+    var toggle = $('archiveProjectImagesInput');
+    if (toggle && !toggle.checked) return { archived: 0, failed: 0, total: 0 };
+    var images = collectRemoteImages(pages);
+    if (!images.length) {
+      setText('projectAssetStatus', 'No remote image URLs found on these pages.');
+      return { archived: 0, failed: 0, total: 0 };
+    }
+    var maxImages = 100;
+    var queue = images.slice(0, maxImages);
+    var archived = 0;
+    var failed = 0;
+    for (var i = 0; i < queue.length; i++) {
+      setText('projectAssetStatus', 'Archiving image ' + (i + 1) + ' of ' + queue.length + '…');
+      try {
+        var result = await server('archiveImage', [projectId, queue[i]]);
+        if (result && (result.saved || result.reused)) archived++;
+      } catch (error) {
+        failed++;
+        console.warn('[HTML Studio] Image archive skipped:', queue[i].url, error);
+      }
+    }
+    if (images.length > maxImages) failed += images.length - maxImages;
+    current.imageAssetCount = Math.max(current.imageAssetCount || 0, archived);
+    setText('projectAssetStatus', archived + ' image' + (archived === 1 ? '' : 's') + ' archived' + (failed ? ' · ' + failed + ' skipped' : '') + '.');
+    return { archived: archived, failed: failed, total: images.length };
+  }
+
+  async function loadProject(projectId) {
+    if (!projectId) return;
+    current.loading = true;
+    renderCurrentProject();
+    try {
+      var meta = await server('get', [projectId]);
+      current.id = meta.id;
+      current.name = meta.name || 'Untitled Project';
+      current.driveUrl = meta.driveUrl || '';
+      current.updatedAt = meta.updatedAt || '';
+      current.imageAssetCount = Number(meta.imageAssetCount || 0);
+      renderCurrentProject();
+      if (window.HTMLStudioReview && HTMLStudioReview.importProjectReview) HTMLStudioReview.importProjectReview(meta.review || { notes: {} });
+
+      var pages = Array.isArray(meta.pages) ? meta.pages : [];
+      for (var i = 0; i < pages.length; i++) {
+        setText('projectSaveStatus', 'Loading page ' + (i + 1) + ' of ' + pages.length + '…');
+        var page = await server('loadPage', [meta.id, pages[i].name]);
+        importPageIntoCore(page);
+      }
+      if (meta.activePage) activatePage(meta.activePage);
+      current.dirty = false;
+      plus.toast('Project loaded from Google Drive.');
+    } catch (error) {
+      console.error('[HTML Studio] Project load failed:', error);
+      current.id = '';
+      current.driveUrl = '';
+      current.updatedAt = '';
+      current.dirty = plus.hasPage();
+      plus.toast('Could not load the saved Drive project: ' + error.message, 'error');
+    } finally {
+      current.loading = false;
+      renderCurrentProject();
+    }
+  }
+
+  async function saveProject(options) {
+    options = options || {};
+    if (current.saving || current.loading) return;
+    if (!plus.hasPage()) {
+      plus.toast('Import or create at least one page before saving a project.', 'error');
+      return;
+    }
+
+    var name = String(options.name || current.name || 'Untitled Project').trim();
+    if (!name) name = 'Untitled Project';
+    var saveAs = !!options.saveAs;
+    current.saving = true;
+    renderCurrentProject();
+
+    try {
+      var snapshot = collectWorkspacePages();
+      var begin = await server('beginSave', [{ projectId: saveAs ? '' : current.id, name: name }]);
+      var pageMeta = [];
+      for (var i = 0; i < snapshot.pages.length; i++) {
+        setText('projectSaveStatus', 'Saving page ' + (i + 1) + ' of ' + snapshot.pages.length + '…');
+        var page = snapshot.pages[i];
+        var saved = await server('savePage', [begin.id, page.name, page.html]);
+        pageMeta.push({ name: saved.name, bytes: saved.bytes });
+      }
+      var archiveSummary = await archiveProjectImages(begin.id, snapshot.pages);
+      var result = await server('finalizeSave', [begin.id, {
+        name: begin.name,
+        activePage: snapshot.activePage,
+        pages: pageMeta,
+        imageArchive: archiveSummary,
+        review: window.HTMLStudioReview && HTMLStudioReview.exportProjectReview ? HTMLStudioReview.exportProjectReview() : null
+      }]);
+      current.id = result.id;
+      current.name = result.name;
+      current.driveUrl = result.driveUrl || begin.driveUrl || '';
+      current.updatedAt = result.updatedAt || '';
+      current.imageAssetCount = Number(result.imageAssetCount || current.imageAssetCount || 0);
+      current.dirty = false;
+      hideSaveAs();
+      plus.toast('Project saved to Google Drive.');
+      refreshProjectList();
+    } catch (error) {
+      console.error('[HTML Studio] Project save failed:', error);
+      current.dirty = true;
+      plus.toast('Project could not be saved: ' + error.message, 'error');
+      var statusNode = $('projectSaveStatus');
+      if (statusNode) statusNode.classList.add('error');
+    } finally {
+      current.saving = false;
+      renderCurrentProject();
+    }
+  }
+
+  function quickSave() {
+    if (current.id) saveProject();
+    else {
+      openModal();
+      showSaveAs(current.name === 'Untitled Project' ? deriveProjectName() : current.name);
+    }
+  }
+
+  function deriveProjectName() {
+    var active = activePageName().replace(/\.(?:html?|txt)$/i, '').replace(/[-_]+/g, ' ').trim();
+    if (!active || active.toLowerCase() === 'index') return 'Untitled Project';
+    return active.replace(/\b\w/g, function (letter) { return letter.toUpperCase(); });
+  }
+
+  function navigateTop(query) {
+    var appUrl = String(config.appUrl || '').trim();
+    if (!appUrl) {
+      plus.toast('The deployed web-app URL is unavailable. Refresh the deployment and try again.', 'error');
+      return;
+    }
+    var anchor = document.createElement('a');
+    anchor.href = appUrl + query;
+    anchor.target = '_top';
+    anchor.rel = 'noopener';
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+  }
+
+  function newProject() {
+    if (current.dirty && !window.confirm('Start a new project? Unsaved changes in the current workspace will be lost.')) return;
+    navigateTop('?new=1');
+  }
+
+  function openProject(project) {
+    if (!project || !project.id) return;
+    if (current.id === project.id) { closeModal(); return; }
+    if (current.dirty && !window.confirm('Open another project? Unsaved changes in the current workspace will be lost.')) return;
+    navigateTop('?project=' + encodeURIComponent(project.id));
+  }
+
+  function closeProjectMenu() {
+    if (openMenu && openMenu.parentNode) openMenu.parentNode.removeChild(openMenu);
+    openMenu = null;
+  }
+
+  function showProjectMenu(anchor, project) {
+    closeProjectMenu();
+    var menu = document.createElement('div');
+    menu.className = 'project-row-menu';
+    menu.innerHTML = '<button type="button" data-action="rename">Rename</button><button type="button" data-action="drive">Open in Drive ↗</button><button type="button" class="danger-text" data-action="delete">Delete project</button>';
+    document.body.appendChild(menu);
+    var rect = anchor.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - 160, rect.right - 152)) + 'px';
+    menu.style.top = Math.min(window.innerHeight - 126, rect.bottom + 4) + 'px';
+    openMenu = menu;
+    menu.addEventListener('click', function (event) {
+      var button = event.target.closest('button');
+      if (!button) return;
+      var action = button.getAttribute('data-action');
+      closeProjectMenu();
+      if (action === 'rename') renameProject(project);
+      if (action === 'drive' && project.driveUrl) window.open(project.driveUrl, '_blank', 'noopener');
+      if (action === 'delete') deleteProject(project);
+    });
+  }
+
+  async function renameProject(project) {
+    var next = window.prompt('Rename project', project.name || 'Untitled Project');
+    if (next == null) return;
+    next = String(next).trim();
+    if (!next) return;
+    try {
+      var result = await server('rename', [project.id, next]);
+      if (current.id === project.id) {
+        current.name = result.name;
+        current.updatedAt = result.updatedAt || current.updatedAt;
+        renderCurrentProject();
+      }
+      plus.toast('Project renamed.');
+      refreshProjectList();
+    } catch (error) { plus.toast('Project could not be renamed: ' + error.message, 'error'); }
+  }
+
+  async function deleteProject(project) {
+    if (!window.confirm('Delete “' + project.name + '” from Google Drive? The project folder will be moved to Trash.')) return;
+    try {
+      await server('delete', [project.id]);
+      if (current.id === project.id) {
+        current.id = '';
+        current.driveUrl = '';
+        current.updatedAt = '';
+        current.dirty = plus.hasPage();
+      }
+      renderCurrentProject();
+      plus.toast('Project moved to Google Drive Trash.');
+      refreshProjectList();
+    } catch (error) { plus.toast('Project could not be deleted: ' + error.message, 'error'); }
+  }
+
+  function renderProjectList(projects) {
+    projectRows = projects || [];
+    var list = $('projectsList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!projectRows.length) {
+      var empty = document.createElement('div');
+      empty.className = 'project-list-empty';
+      empty.textContent = 'No saved projects yet. Save the current workspace to create your first Drive project.';
+      list.appendChild(empty);
+      return;
+    }
+
+    projectRows.forEach(function (project) {
+      var row = document.createElement('article');
+      row.className = 'project-row' + (project.id === current.id ? ' current' : '');
+      var main = document.createElement('div');
+      main.className = 'project-row-main';
+      var name = document.createElement('div');
+      name.className = 'project-row-name';
+      name.textContent = project.name || 'Untitled Project';
+      var meta = document.createElement('div');
+      meta.className = 'project-row-meta';
+      meta.textContent = (project.pageCount || 0) + ' page' + (project.pageCount === 1 ? '' : 's') + (project.noteCount ? ' · ' + project.noteCount + ' note' + (project.noteCount === 1 ? '' : 's') : '') + (project.imageAssetCount ? ' · ' + project.imageAssetCount + ' image asset' + (project.imageAssetCount === 1 ? '' : 's') : '') + (project.updatedAt ? ' · Updated ' + formatDate(project.updatedAt) : '');
+      main.appendChild(name);
+      main.appendChild(meta);
+
+      var actions = document.createElement('div');
+      actions.className = 'project-row-actions';
+      var open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'button secondary';
+      open.textContent = project.id === current.id ? 'Current' : 'Open';
+      open.disabled = project.id === current.id;
+      open.addEventListener('click', function () { openProject(project); });
+      var more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'icon-btn';
+      more.textContent = '···';
+      more.setAttribute('aria-label', 'Project actions');
+      more.addEventListener('click', function (event) { event.stopPropagation(); showProjectMenu(more, project); });
+      actions.appendChild(open);
+      actions.appendChild(more);
+      row.appendChild(main);
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+  }
+
+  async function refreshProjectList() {
+    var loading = $('projectsLoading');
+    if (loading) loading.classList.remove('hidden');
+    try {
+      var projects = await server('list');
+      renderProjectList(projects || []);
+      try {
+        var storage = await server('storage');
+        var link = $('projectStorageLink');
+        if (link && storage && storage.driveUrl) {
+          link.href = storage.driveUrl;
+          link.classList.remove('hidden');
+        }
+      } catch (_) {}
+    } catch (error) {
+      console.error('[HTML Studio] Project list failed:', error);
+      renderProjectList([]);
+      plus.toast('Google Drive projects are unavailable: ' + error.message, 'error');
+    } finally {
+      if (loading) loading.classList.add('hidden');
+    }
+  }
+
+  function bindDirtyTracking() {
+    var pageList = $('pageList');
+    var lastPageSignature = pageNames().join('\n');
+    if (pageList && window.MutationObserver) {
+      new MutationObserver(function () {
+        var nextSignature = pageNames().join('\n');
+        if (nextSignature !== lastPageSignature) {
+          lastPageSignature = nextSignature;
+          window.setTimeout(markDirty, 0);
+        }
+      }).observe(pageList, { childList: true, subtree: true });
+    }
+
+    document.addEventListener('click', function (event) {
+      if (current.loading || current.saving) return;
+      var target = event.target.closest && event.target.closest('button');
+      if (!target) return;
+      var id = target.id || '';
+      if (['applyCodeBtn','importPasteBtn','addPageBtn','undoBtn','redoBtn','deleteElementBtn','duplicateElementBtn','applyGlobalStylesBtn','resetGlobalStylesBtn'].indexOf(id) >= 0) {
+        window.setTimeout(markDirty, 0);
+        return;
+      }
+      if (target.closest('.page-popover') && ['rename','duplicate','delete'].indexOf(target.getAttribute('data-action')) >= 0) window.setTimeout(markDirty, 0);
+    }, true);
+
+    var inspector = $('inspectorPanel');
+    if (inspector) {
+      inspector.addEventListener('change', function () { window.setTimeout(markDirty, 0); }, true);
+      inspector.addEventListener('input', function (event) {
+        if (event.target && event.target.type === 'color') window.setTimeout(markDirty, 0);
+      }, true);
+    }
+    var fileInput = $('fileInput');
+    if (fileInput) fileInput.addEventListener('change', function () { window.setTimeout(markDirty, 0); });
+    document.addEventListener('htmlstudio:review-notes-changed', function () { window.setTimeout(markDirty, 0); });
+  }
+
+  function bindUi() {
+    if ($('projectBrowserBtn')) $('projectBrowserBtn').addEventListener('click', openModal);
+    if ($('projectQuickSaveBtn')) $('projectQuickSaveBtn').addEventListener('click', quickSave);
+    if ($('projectModalSaveBtn')) $('projectModalSaveBtn').addEventListener('click', quickSave);
+    if ($('saveAsProjectBtn')) $('saveAsProjectBtn').addEventListener('click', function () { showSaveAs(current.name === 'Untitled Project' ? deriveProjectName() : current.name); });
+    if ($('cancelSaveAsProjectBtn')) $('cancelSaveAsProjectBtn').addEventListener('click', hideSaveAs);
+    if ($('confirmSaveAsProjectBtn')) $('confirmSaveAsProjectBtn').addEventListener('click', function () {
+      var name = $('projectNameInput') ? $('projectNameInput').value : '';
+      saveProject({ name: name, saveAs: true });
+    });
+    if ($('projectNameInput')) $('projectNameInput').addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { event.preventDefault(); $('confirmSaveAsProjectBtn').click(); }
+    });
+    if ($('newProjectBtn')) $('newProjectBtn').addEventListener('click', newProject);
+    if ($('refreshProjectsBtn')) $('refreshProjectsBtn').addEventListener('click', refreshProjectList);
+    if ($('projectsCloseBtn')) $('projectsCloseBtn').addEventListener('click', closeModal);
+
+    document.addEventListener('click', function (event) {
+      if (openMenu && !openMenu.contains(event.target)) closeProjectMenu();
+    });
+
+    window.addEventListener('keydown', function (event) {
+      var editing = document.activeElement && ['INPUT','TEXTAREA','SELECT'].indexOf(document.activeElement.tagName) >= 0;
+      if (!editing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        quickSave();
+      }
+      if (event.key === 'Escape' && $('projectsModal') && !$('projectsModal').classList.contains('hidden')) closeModal();
+    }, true);
+  }
+
+  function init() {
+    bindUi();
+    bindDirtyTracking();
+    renderCurrentProject();
+    setModuleStatus('ready');
+    if (current.id) loadProject(current.id);
+  }
+
+  window.HTMLStudioProjects = {
+    getCurrent: function () { return Object.assign({}, current); },
+    save: function () { return saveProject(); },
+    saveAs: function (name) { return saveProject({ name: name, saveAs: true }); },
+    list: refreshProjectList,
+    openBrowser: openModal,
+    markDirty: markDirty
+  };
+
+  try { init(); }
+  catch (error) {
+    console.error('[HTML Studio] Projects module failed:', error);
+    setModuleStatus('error');
+    plus.toast('Drive project tools could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

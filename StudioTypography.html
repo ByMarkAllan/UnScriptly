@@ -1,0 +1,161 @@
+<script>
+(function () {
+  'use strict';
+  var plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  var MATERIAL_SYMBOLS_URL = 'https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200';
+  var MATERIAL_SYMBOLS_STYLE = "font-family:'Material Symbols Outlined';font-weight:normal;font-style:normal;font-size:40px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;font-feature-settings:'liga';-webkit-font-feature-settings:'liga';-webkit-font-smoothing:antialiased;font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 40;";
+  var GOOGLE_FONTS = new Set(['Inter','Roboto','Open Sans','Lato','Montserrat','Poppins','DM Sans','Manrope','Plus Jakarta Sans','Space Grotesk','IBM Plex Sans','Nunito Sans','Work Sans','Source Sans 3','Merriweather','Playfair Display','Libre Baskerville','Roboto Mono','Space Mono']);
+  var ICONS = ['home','menu','close','search','settings','person','account_circle','favorite','favorite_border','star','star_border','check','check_circle','cancel','add','remove','edit','delete','content_copy','download','upload','share','link','arrow_back','arrow_forward','arrow_upward','arrow_downward','chevron_left','chevron_right','expand_more','expand_less','more_horiz','more_vert','info','warning','error','help','visibility','visibility_off','lock','lock_open','mail','call','location_on','calendar_month','schedule','notifications','language','public','shopping_cart','payments','credit_card','dashboard','apps','grid_view','list','filter_list','tune','refresh','play_arrow','pause','stop','skip_next','skip_previous','volume_up','volume_off','image','photo_camera','videocam','mic','headphones','music_note','folder','description','attach_file','cloud','cloud_upload','cloud_download','rocket_launch','bolt','lightbulb','auto_awesome','palette','code','terminal','database','analytics','bar_chart','monitoring','trending_up','trending_down','work','business','storefront','groups','school','flag','bookmark'];
+
+  function $(id) { return document.getElementById(id); }
+  function setStatus(value) { document.documentElement.setAttribute('data-html-studio-typography', value); }
+  function googleFontUrl(family) {
+    var encoded = encodeURIComponent(String(family || '').trim()).replace(/%20/g, '+');
+    return 'https://fonts.googleapis.com/css2?family=' + encoded + ':wght@300;400;500;600;700;800;900&display=swap';
+  }
+  function openModal(id) { var el = $(id); if (el) el.classList.remove('hidden'); }
+  function closeModal(id) { var el = $(id); if (el) el.classList.add('hidden'); }
+
+  function ensureEditorMaterialSymbols() {
+    if (document.head.querySelector('link[data-editor-material-symbols]')) return;
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = MATERIAL_SYMBOLS_URL;
+    link.setAttribute('data-editor-material-symbols', '1');
+    document.head.appendChild(link);
+  }
+
+  function applyFontFamily(family, custom) {
+    var selected = plus.getSelection();
+    var value = String(family || '').trim();
+    if (!selected) { plus.toast('Select a text element first.', 'error'); return; }
+    if (!value || value === '__inherit__') {
+      plus.styleSelected('font-family', '', { message: 'Font reset to inherited style.' });
+      return;
+    }
+    var stacks = {
+      'Arial': 'Arial, sans-serif',
+      'Georgia': 'Georgia, serif',
+      'Times New Roman': '"Times New Roman", Times, serif',
+      'Verdana': 'Verdana, sans-serif',
+      'Courier New': '"Courier New", monospace'
+    };
+    if (custom || GOOGLE_FONTS.has(value)) {
+      plus.patchSelected(function (target) {
+        target.style.setProperty('font-family', '"' + value.replace(/"/g, '') + '", sans-serif');
+      }, {
+        stylesheetUrl: googleFontUrl(value),
+        stylesheetKey: 'font-' + value.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        message: value + ' applied.'
+      });
+    } else {
+      plus.styleSelected('font-family', stacks[value] || value, { message: value + ' applied.' });
+    }
+  }
+
+  function updateSelection(selected) {
+    var iconControls = $('iconControls');
+    var mediaControls = $('mediaElementControls');
+    var isIcon = !!(selected && selected.classes && selected.classes.indexOf('material-symbols-outlined') >= 0);
+    if (iconControls) iconControls.classList.toggle('hidden', !isIcon);
+    if (mediaControls && (!selected || (selected.tag !== 'video' && selected.tag !== 'audio'))) mediaControls.classList.add('hidden');
+    if (isIcon) {
+      if ($('iconNameInput')) $('iconNameInput').value = selected.text || 'star';
+    }
+    var family = $('fontFamilyInput');
+    if (family) family.value = '__inherit__';
+    if ($('customFontControls')) $('customFontControls').classList.add('hidden');
+  }
+
+  function updateIconVariation() {
+    var selected = plus.getSelection();
+    if (!selected || !selected.classes || selected.classes.indexOf('material-symbols-outlined') < 0) return;
+    var weight = $('iconWeightInput') ? $('iconWeightInput').value : '400';
+    var fill = $('iconFillInput') && $('iconFillInput').checked ? '1' : '0';
+    plus.styleSelected('font-variation-settings', "'FILL' " + fill + ", 'wght' " + weight + ", 'GRAD' 0, 'opsz' 40", { message: 'Icon style updated.' });
+  }
+
+  function iconMarkup(name) {
+    var clean = String(name || 'star').trim().replace(/[^a-z0-9_]/gi, '_') || 'star';
+    return '<span class="material-symbols-outlined" aria-hidden="true" style="' + MATERIAL_SYMBOLS_STYLE + '">' + clean + '</span>';
+  }
+
+  function chooseIcon(name) {
+    var selected = plus.getSelection();
+    var selectedIcon = !!(selected && selected.classes && selected.classes.indexOf('material-symbols-outlined') >= 0);
+    if (selectedIcon) plus.textSelected(name, { message: 'Icon changed.' });
+    else {
+      var position = $('insertPositionInput') ? $('insertPositionInput').value : 'smart';
+      plus.insertHtml(iconMarkup(name), position, { stylesheetUrl: MATERIAL_SYMBOLS_URL, stylesheetKey: 'material-symbols', message: 'Icon added.' });
+    }
+    closeModal('iconPickerModal');
+  }
+
+  function renderIconPicker(query) {
+    var grid = $('iconPickerGrid');
+    if (!grid) return;
+    var q = String(query || '').trim().toLowerCase();
+    grid.innerHTML = '';
+    ICONS.filter(function (name) { return !q || name.indexOf(q) >= 0; }).forEach(function (name) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'icon-pick';
+      var symbol = document.createElement('span');
+      symbol.className = 'icon-pick-symbol';
+      symbol.textContent = name;
+      var label = document.createElement('span');
+      label.className = 'icon-pick-name';
+      label.textContent = name;
+      button.appendChild(symbol);
+      button.appendChild(label);
+      button.addEventListener('click', function () { chooseIcon(name); });
+      grid.appendChild(button);
+    });
+  }
+
+  function openIconPicker() {
+    try { ensureEditorMaterialSymbols(); } catch (_) {}
+    if ($('iconSearchInput')) $('iconSearchInput').value = '';
+    renderIconPicker('');
+    openModal('iconPickerModal');
+  }
+
+  function init() {
+    var family = $('fontFamilyInput');
+    if (family) family.addEventListener('change', function () {
+      var custom = family.value === '__custom__';
+      if ($('customFontControls')) $('customFontControls').classList.toggle('hidden', !custom);
+      if (!custom) applyFontFamily(family.value, false);
+    });
+    if ($('applyCustomFontBtn')) $('applyCustomFontBtn').addEventListener('click', function () { applyFontFamily($('customFontInput').value, true); });
+    if ($('customFontInput')) $('customFontInput').addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { event.preventDefault(); applyFontFamily($('customFontInput').value, true); }
+    });
+    if ($('lineHeightInput')) $('lineHeightInput').addEventListener('change', function () { plus.styleSelected('line-height', $('lineHeightInput').value.trim(), { message: 'Line height updated.' }); });
+    if ($('letterSpacingInput')) $('letterSpacingInput').addEventListener('change', function () { plus.styleSelected('letter-spacing', $('letterSpacingInput').value.trim(), { message: 'Letter spacing updated.' }); });
+    if ($('iconNameInput')) $('iconNameInput').addEventListener('change', function () { plus.textSelected($('iconNameInput').value.trim() || 'star', { message: 'Icon changed.' }); });
+    if ($('iconWeightInput')) $('iconWeightInput').addEventListener('change', updateIconVariation);
+    if ($('iconFillInput')) $('iconFillInput').addEventListener('change', updateIconVariation);
+    if ($('openIconPickerBtn')) $('openIconPickerBtn').addEventListener('click', openIconPicker);
+    if ($('iconSearchInput')) $('iconSearchInput').addEventListener('input', function () { renderIconPicker($('iconSearchInput').value); });
+    document.addEventListener('htmlstudio:plus-selection', function (event) { updateSelection(event.detail || null); });
+    qsaModalClose();
+    setStatus('ready');
+  }
+
+  function qsaModalClose() {
+    Array.prototype.slice.call(document.querySelectorAll('[data-close-modal="iconPickerModal"]')).forEach(function (button) {
+      button.addEventListener('click', function () { closeModal('iconPickerModal'); });
+    });
+  }
+
+  try { init(); }
+  catch (error) {
+    console.error('[HTML Studio] Typography extension failed:', error);
+    setStatus('error');
+    plus.toast('Font/icon tools could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

@@ -1,0 +1,819 @@
+<script>
+(function () {
+  'use strict';
+
+  var plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  var HTML2CANVAS_URL = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+  var rendererSourcePromise = null;
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
+  function setStatus(value) { document.documentElement.setAttribute('data-html-studio-png', value); }
+  function delay(ms) { return new Promise(function (resolve) { window.setTimeout(resolve, ms); }); }
+
+  function withTimeout(promise, ms, message) {
+    var timer;
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise(function (_, reject) {
+        timer = window.setTimeout(function () {
+          reject(new Error(message || 'Operation timed out.'));
+        }, ms);
+      })
+    ]).then(function (value) {
+      window.clearTimeout(timer);
+      return value;
+    }, function (error) {
+      window.clearTimeout(timer);
+      throw error;
+    });
+  }
+
+  function openPngModal(scope) {
+    if (!plus.hasPage()) {
+      plus.toast('Import or create a page before exporting PNG.', 'error');
+      return;
+    }
+    if ($('exportModal')) $('exportModal').classList.add('hidden');
+    if ($('pngScopeInput')) $('pngScopeInput').value = scope || 'current';
+    if ($('pngModal')) $('pngModal').classList.remove('hidden');
+    updateProgress('');
+  }
+
+  function currentName() {
+    return $('currentPageLabel')
+      ? String($('currentPageLabel').textContent || 'page.html').trim()
+      : 'page.html';
+  }
+
+  function pageNames() {
+    return qsa('#pageList .page-item .page-name')
+      .map(function (node) { return String(node.textContent || '').trim(); })
+      .filter(Boolean);
+  }
+
+  function activatePage(name) {
+    var items = qsa('#pageList .page-item');
+    for (var i = 0; i < items.length; i++) {
+      var node = items[i].querySelector('.page-name');
+      if (node && String(node.textContent || '').trim() === name) {
+        items[i].click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function readActiveSource() {
+    var source = '';
+    plus.withSource(function (html) {
+      source = html;
+      return html;
+    }, '');
+    return source;
+  }
+
+  function collectSources(scope) {
+    if (scope !== 'all') {
+      return [{ name: currentName(), html: readActiveSource() }];
+    }
+
+    var names = pageNames();
+    var active = currentName();
+    var pages = [];
+
+    names.forEach(function (name) {
+      if (!activatePage(name)) return;
+      pages.push({ name: name, html: readActiveSource() });
+    });
+
+    if (active) activatePage(active);
+    return pages;
+  }
+
+  function sanitizedCaptureHtml(source) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(String(source || ''), 'text/html');
+
+    qsa('script', doc).forEach(function (script) { script.remove(); });
+    qsa('meta[http-equiv]', doc).forEach(function (meta) {
+      if (String(meta.getAttribute('http-equiv') || '').toLowerCase() === 'content-security-policy') {
+        meta.remove();
+      }
+    });
+    qsa('iframe,object,embed', doc).forEach(function (node) { node.remove(); });
+
+    qsa('*', doc).forEach(function (node) {
+      Array.prototype.slice.call(node.attributes || []).forEach(function (attr) {
+        if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
+        if ((attr.name === 'href' || attr.name === 'src') && /^javascript:/i.test(String(attr.value || '').trim())) {
+          node.removeAttribute(attr.name);
+        }
+      });
+      if (String(node.tagName || '').toLowerCase() === 'img') {
+        node.setAttribute('loading', 'eager');
+        node.setAttribute('decoding', 'sync');
+      }
+    });
+
+    var prefix = /^\s*<!doctype\s+html/i.test(String(source || ''))
+      ? '<!DOCTYPE html>\n'
+      : '';
+    return prefix + doc.documentElement.outerHTML;
+  }
+
+  function waitImages(doc, timeout) {
+    var images = qsa('img', doc);
+    if (!images.length) return Promise.resolve();
+
+    var work = Promise.all(images.map(function (img) {
+      if (img.complete) return Promise.resolve();
+      return new Promise(function (resolve) {
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+      });
+    }));
+
+    return withTimeout(work, timeout || 4500, 'Image loading timed out.').catch(function () {
+      /* Missing/cross-origin images are allowed to be omitted rather than blocking export. */
+    });
+  }
+
+  function waitFonts(doc, timeout) {
+    if (!doc || !doc.fonts || !doc.fonts.ready) return Promise.resolve();
+    return withTimeout(
+      Promise.resolve(doc.fonts.ready).catch(function () {}),
+      timeout || 2800,
+      'Font loading timed out.'
+    ).catch(function () {
+      /* Use fallback fonts instead of hanging forever. */
+    });
+  }
+
+  function prepareFrame(source, width) {
+    return new Promise(function (resolve, reject) {
+      var frame = document.createElement('iframe');
+      var settled = false;
+
+      frame.setAttribute('aria-hidden', 'true');
+      frame.setAttribute('sandbox', 'allow-same-origin allow-scripts');
+      frame.style.position = 'fixed';
+      frame.style.left = '-20000px';
+      frame.style.top = '0';
+      frame.style.width = width + 'px';
+      frame.style.height = '1000px';
+      frame.style.border = '0';
+      frame.style.opacity = '0';
+      frame.style.pointerEvents = 'none';
+      frame.style.zIndex = '-1';
+      document.body.appendChild(frame);
+
+      var timer = window.setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        frame.remove();
+        reject(new Error('PNG render frame timed out before the page became ready.'));
+      }, 12000);
+
+      frame.onload = function () {
+        if (settled) return;
+
+        var doc;
+        try {
+          doc = frame.contentDocument;
+          if (!doc || !doc.documentElement) throw new Error('PNG render document is unavailable.');
+        } catch (error) {
+          settled = true;
+          window.clearTimeout(timer);
+          frame.remove();
+          reject(error);
+          return;
+        }
+
+        Promise.all([
+          waitFonts(doc, 2800),
+          waitImages(doc, 4800)
+        ]).then(function () {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+
+          var body = doc.body;
+          var root = doc.documentElement;
+          var height = Math.max(
+            root.scrollHeight,
+            root.offsetHeight,
+            body ? body.scrollHeight : 0,
+            body ? body.offsetHeight : 0,
+            1
+          );
+          var measuredWidth = Math.max(
+            Number(width || 0),
+            root.scrollWidth || 0,
+            body ? body.scrollWidth : 0,
+            1
+          );
+
+          frame.style.width = measuredWidth + 'px';
+          frame.style.height = height + 'px';
+
+          resolve({
+            frame: frame,
+            doc: doc,
+            width: measuredWidth,
+            height: height
+          });
+        }).catch(function (error) {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          frame.remove();
+          reject(error);
+        });
+      };
+
+      frame.srcdoc = sanitizedCaptureHtml(source);
+    });
+  }
+
+  function injectRendererSource(win, doc, source) {
+    /*
+     * html2canvas must execute in the SAME browsing context as the DOM it
+     * captures. Safari/iPad can stall when a renderer from the same-realm capture frame
+     * is asked to clone an element owned by a different iframe document.
+     *
+     * The capture document is sanitized before loading (original scripts and
+     * inline event handlers are removed), so the hidden frame can safely allow
+     * our renderer script to execute. The loader <script> removes itself
+     * immediately after initialization so html2canvas never clones its own
+     * ~200 KB source.
+     */
+    if (win && win.html2canvas) return win.html2canvas;
+    if (!win || !doc) throw new Error('PNG capture frame is unavailable.');
+    if (!source) throw new Error('PNG renderer source is empty.');
+
+    var script = doc.createElement('script');
+    script.type = 'text/javascript';
+    script.setAttribute('data-unscriptly-png-renderer', 'true');
+    script.text = String(source);
+    (doc.head || doc.documentElement).appendChild(script);
+
+    if (!win.html2canvas) {
+      script.remove();
+      throw new Error('PNG renderer source loaded but did not initialize in the capture frame.');
+    }
+
+    script.remove();
+    return win.html2canvas;
+  }
+
+  function rendererSourceFromServer() {
+    if (!(window.google && google.script && google.script.run)) {
+      return Promise.reject(new Error('Apps Script renderer proxy is unavailable.'));
+    }
+
+    return withTimeout(new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(function (source) { resolve(String(source || '')); })
+        .withFailureHandler(function (error) {
+          reject(error instanceof Error ? error : new Error(String(error && error.message || error || 'Renderer proxy failed.')));
+        })
+        .htmlStudioGetPngRendererSource();
+    }), 15000, 'Apps Script PNG renderer proxy timed out.');
+  }
+
+  function rendererSourceFromBrowser() {
+    if (!window.fetch) return Promise.reject(new Error('Browser fetch is unavailable.'));
+    return withTimeout(
+      fetch(HTML2CANVAS_URL, { mode: 'cors', cache: 'force-cache', credentials: 'omit' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('PNG renderer returned HTTP ' + response.status + '.');
+          return response.text();
+        }),
+      9000,
+      'PNG renderer browser download timed out.'
+    );
+  }
+
+  function loadRendererSource() {
+    if (rendererSourcePromise) return rendererSourcePromise;
+
+    var primary = (window.google && google.script && google.script.run)
+      ? rendererSourceFromServer()
+      : rendererSourceFromBrowser();
+
+    rendererSourcePromise = primary.catch(function (serverError) {
+      console.warn('[HTML Studio PNG] Primary renderer source failed; trying browser CDN.', serverError);
+      return rendererSourceFromBrowser();
+    }).then(function (source) {
+      if (!source || source.length < 10000 || source.indexOf('html2canvas') === -1) {
+        throw new Error('PNG renderer payload was invalid.');
+      }
+      return source;
+    });
+
+    return rendererSourcePromise;
+  }
+
+  function isAppleTouchDevice() {
+    var nav = window.navigator || {};
+    var platform = String(nav.platform || '');
+    var ua = String(nav.userAgent || '');
+    return /iPad|iPhone|iPod/i.test(ua) ||
+      (platform === 'MacIntel' && Number(nav.maxTouchPoints || 0) > 1);
+  }
+
+  function safeScale(width, height, requested) {
+    /*
+     * Safari on iPad can capture a large canvas successfully and then spend a
+     * very long time encoding that canvas as PNG. Keep a more conservative
+     * pixel budget on Apple touch devices. Desktop browsers retain the larger
+     * budget.
+     */
+    var appleTouch = isAppleTouchDevice();
+    var maxPixels = appleTouch ? 8000000 : 16000000;
+    var maxDimension = appleTouch ? 6144 : 8192;
+    var scale = Number(requested || 1) || 1;
+
+    scale = Math.min(
+      scale,
+      maxDimension / Math.max(width, 1),
+      maxDimension / Math.max(height, 1),
+      Math.sqrt(maxPixels / Math.max(width * height, 1))
+    );
+
+    return Math.max(0.18, scale);
+  }
+
+  function captureWithHtml2Canvas(prepared, requestedScale) {
+    var win = prepared.frame.contentWindow;
+    var doc = prepared.doc;
+
+    return loadRendererSource().then(function (source) {
+      var renderer = injectRendererSource(win, doc, source);
+      var scale = safeScale(prepared.width, prepared.height, requestedScale);
+      var target = doc.body || doc.documentElement;
+
+      if (scale + 0.01 < Number(requestedScale || 1)) {
+        plus.toast('This long page was automatically scaled to stay within browser PNG limits.');
+      }
+
+      updateProgress('Capturing rendered page…');
+
+      return delay(50).then(function () {
+        return withTimeout(renderer(target, {
+          backgroundColor: null,
+          logging: false,
+          useCORS: true,
+          allowTaint: false,
+          foreignObjectRendering: false,
+          scale: scale,
+          width: prepared.width,
+          height: prepared.height,
+          windowWidth: prepared.width,
+          windowHeight: prepared.height,
+          x: 0,
+          y: 0,
+          scrollX: 0,
+          scrollY: 0,
+          imageTimeout: 3200,
+          removeContainer: true,
+          onclone: function (clonedDoc) {
+            try {
+              qsa('script,iframe,object,embed', clonedDoc).forEach(function (node) { node.remove(); });
+              qsa('[data-unscriptly-hover],[data-unscriptly-selected]', clonedDoc).forEach(function (node) {
+                node.removeAttribute('data-unscriptly-hover');
+                node.removeAttribute('data-unscriptly-selected');
+              });
+              var style = clonedDoc.createElement('style');
+              style.textContent = '*{animation:none!important;transition:none!important;}html,body{scroll-behavior:auto!important;}';
+              (clonedDoc.head || clonedDoc.documentElement).appendChild(style);
+            } catch (_) {}
+          }
+        }), 26000, 'Primary PNG capture timed out.');
+      });
+    });
+  }
+
+  function inlineComputedStyles(sourceRoot, cloneRoot, win) {
+    var sourceNodes = [sourceRoot].concat(qsa('*', sourceRoot));
+    var cloneNodes = [cloneRoot].concat(qsa('*', cloneRoot));
+    var length = Math.min(sourceNodes.length, cloneNodes.length);
+
+    for (var i = 0; i < length; i++) {
+      var source = sourceNodes[i];
+      var clone = cloneNodes[i];
+      var computed = win.getComputedStyle(source);
+      var css = '';
+
+      for (var j = 0; j < computed.length; j++) {
+        var prop = computed[j];
+        css += prop + ':' + computed.getPropertyValue(prop) + ';';
+      }
+      clone.setAttribute('style', css);
+    }
+  }
+
+  function captureWithForeignObject(prepared, requestedScale) {
+    var task = new Promise(function (resolve, reject) {
+      try {
+        var scale = safeScale(prepared.width, prepared.height, requestedScale);
+        var root = prepared.doc.documentElement;
+        var clone = root.cloneNode(true);
+        clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+        inlineComputedStyles(root, clone, prepared.frame.contentWindow);
+        qsa('script', clone).forEach(function (node) { node.remove(); });
+
+        var xhtml = new XMLSerializer().serializeToString(clone);
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + prepared.width + '" height="' + prepared.height + '">' +
+          '<foreignObject width="100%" height="100%">' + xhtml + '</foreignObject></svg>';
+
+        var blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var image = new Image();
+
+        image.onload = function () {
+          try {
+            var canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(prepared.width * scale));
+            canvas.height = Math.max(1, Math.round(prepared.height * scale));
+            var ctx = canvas.getContext('2d');
+            ctx.scale(scale, scale);
+            ctx.drawImage(image, 0, 0);
+            URL.revokeObjectURL(url);
+            resolve(canvas);
+          } catch (error) {
+            URL.revokeObjectURL(url);
+            reject(error);
+          }
+        };
+
+        image.onerror = function () {
+          URL.revokeObjectURL(url);
+          reject(new Error('Native PNG fallback could not render this page.'));
+        };
+
+        image.src = url;
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    return withTimeout(task, 12000, 'Native PNG fallback timed out.');
+  }
+
+  function renderPage(page, width, scale) {
+    var preparedRef = null;
+
+    var task = prepareFrame(page.html, width).then(function (prepared) {
+      preparedRef = prepared;
+
+      return captureWithHtml2Canvas(prepared, scale).catch(function (primaryError) {
+        console.warn('[HTML Studio PNG] primary same-realm capture failed; retrying simplified capture.', primaryError);
+        updateProgress('Primary capture unavailable. Retrying simplified capture…');
+
+        return loadRendererSource().then(function (source) {
+          var win = prepared.frame.contentWindow;
+          var doc = prepared.doc;
+          var renderer = injectRendererSource(win, doc, source);
+          var target = doc.body || doc.documentElement;
+          var retryScale = Math.min(1, safeScale(prepared.width, prepared.height, scale));
+
+          return delay(60).then(function () {
+            return withTimeout(renderer(target, {
+              backgroundColor: null,
+              logging: false,
+              useCORS: false,
+              allowTaint: false,
+              foreignObjectRendering: false,
+              scale: retryScale,
+              width: prepared.width,
+              height: prepared.height,
+              windowWidth: prepared.width,
+              windowHeight: prepared.height,
+              x: 0,
+              y: 0,
+              scrollX: 0,
+              scrollY: 0,
+              imageTimeout: 700,
+              removeContainer: true,
+              ignoreElements: function (node) {
+                var tag = String(node && node.tagName || '').toLowerCase();
+                return tag === 'iframe' || tag === 'object' || tag === 'embed' || tag === 'video' || tag === 'audio';
+              },
+              onclone: function (clonedDoc) {
+                try {
+                  qsa('script,iframe,object,embed,video,audio', clonedDoc).forEach(function (node) { node.remove(); });
+                  var style = clonedDoc.createElement('style');
+                  style.textContent = '*{animation:none!important;transition:none!important;}html,body{scroll-behavior:auto!important;}';
+                  (clonedDoc.head || clonedDoc.documentElement).appendChild(style);
+                } catch (_) {}
+              }
+            }), 15000, 'Simplified PNG capture timed out.');
+          });
+        }).catch(function (simplifiedError) {
+          console.warn('[HTML Studio PNG] simplified capture failed; trying native SVG fallback.', simplifiedError);
+          updateProgress('Simplified capture unavailable. Trying native fallback…');
+          return captureWithForeignObject(prepared, Math.min(1, scale)).catch(function (nativeError) {
+            var message = 'PNG capture failed on this page. Primary: ' +
+              String(primaryError && primaryError.message || primaryError || 'unknown') +
+              ' Simplified: ' + String(simplifiedError && simplifiedError.message || simplifiedError || 'unknown') +
+              ' Native: ' + String(nativeError && nativeError.message || nativeError || 'unknown');
+            throw new Error(message);
+          });
+        });
+      });
+    });
+
+    return withTimeout(task, 56000, 'PNG export timed out. Try Current canvas width and Standard quality.')
+      .then(function (canvas) {
+        /*
+         * Do NOT remove the capture iframe here. html2canvas creates its canvas
+         * in the capture frame's browsing context. Safari/iPad can stall in
+         * canvas.toBlob() if that owning document is destroyed before encoding
+         * finishes. The caller cleans up only after PNG encoding completes.
+         */
+        return { canvas: canvas, frame: preparedRef && preparedRef.frame };
+      }, function (error) {
+        if (preparedRef && preparedRef.frame) preparedRef.frame.remove();
+        throw error;
+      });
+  }
+
+  function cleanupCapture(capture) {
+    try {
+      if (capture && capture.frame && capture.frame.parentNode) capture.frame.remove();
+    } catch (_) {}
+  }
+
+  function downscaleCanvas(canvas, maxPixels) {
+    var width = Number(canvas && canvas.width || 0);
+    var height = Number(canvas && canvas.height || 0);
+    var pixels = width * height;
+    if (!canvas || !width || !height || !pixels || pixels <= maxPixels) return canvas;
+
+    var ratio = Math.sqrt(maxPixels / pixels);
+    var doc = canvas.ownerDocument || document;
+    var reduced = doc.createElement('canvas');
+    reduced.width = Math.max(1, Math.round(width * ratio));
+    reduced.height = Math.max(1, Math.round(height * ratio));
+    var ctx = reduced.getContext('2d');
+    if (!ctx) return canvas;
+    ctx.drawImage(canvas, 0, 0, reduced.width, reduced.height);
+    return reduced;
+  }
+
+  function encodeTimeoutMs(canvas) {
+    var pixels = Math.max(1, Number(canvas && canvas.width || 1) * Number(canvas && canvas.height || 1));
+    var megapixels = pixels / 1000000;
+    var base = isAppleTouchDevice() ? 14000 : 9000;
+    var perMp = isAppleTouchDevice() ? 3200 : 1800;
+    return Math.min(isAppleTouchDevice() ? 48000 : 32000, Math.max(base, Math.round(base + megapixels * perMp)));
+  }
+
+  function encodeCanvasOnce(canvas) {
+    return new Promise(function (resolve, reject) {
+      if (!canvas) {
+        reject(new Error('PNG renderer returned no canvas.'));
+        return;
+      }
+
+      if (!canvas.toBlob) {
+        try {
+          var fallbackCanvas = downscaleCanvas(canvas, isAppleTouchDevice() ? 5000000 : 9000000);
+          var data = fallbackCanvas.toDataURL('image/png');
+          var raw = atob(data.split(',')[1]);
+          var bytes = new Uint8Array(raw.length);
+          for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+          resolve(new Blob([bytes], { type: 'image/png' }));
+        } catch (error) {
+          reject(error);
+        }
+        return;
+      }
+
+      canvas.toBlob(function (blob) {
+        blob ? resolve(blob) : reject(new Error('PNG conversion failed. A cross-origin image may have blocked canvas export.'));
+      }, 'image/png');
+    });
+  }
+
+  function canvasBlob(canvas) {
+    if (!canvas) return Promise.reject(new Error('PNG renderer returned no canvas.'));
+
+    var first = isAppleTouchDevice() ? downscaleCanvas(canvas, 8000000) : canvas;
+    updateProgress('Encoding PNG…');
+
+    return withTimeout(
+      encodeCanvasOnce(first),
+      encodeTimeoutMs(first),
+      'PNG encoding is taking longer than expected.'
+    ).catch(function (firstError) {
+      console.warn('[HTML Studio PNG] first PNG encoding pass failed; retrying at a safer size.', firstError);
+      updateProgress('PNG encoding is taking longer on this device. Retrying at a safer size…');
+
+      var retry = downscaleCanvas(first, isAppleTouchDevice() ? 4500000 : 7500000);
+      if (retry === first && first.width * first.height > 1000000) {
+        var doc = first.ownerDocument || document;
+        retry = doc.createElement('canvas');
+        retry.width = Math.max(1, Math.round(first.width * 0.82));
+        retry.height = Math.max(1, Math.round(first.height * 0.82));
+        var ctx = retry.getContext('2d');
+        if (ctx) ctx.drawImage(first, 0, 0, retry.width, retry.height);
+        else retry = first;
+      }
+
+      return withTimeout(
+        encodeCanvasOnce(retry),
+        Math.min(52000, encodeTimeoutMs(retry) + 8000),
+        'PNG encoding timed out after the reduced-size retry.'
+      );
+    });
+  }
+
+  function captureBlob(capture) {
+    if (!capture || !capture.canvas) {
+      cleanupCapture(capture);
+      return Promise.reject(new Error('PNG renderer returned no canvas.'));
+    }
+
+    return canvasBlob(capture.canvas).then(function (blob) {
+      cleanupCapture(capture);
+      return blob;
+    }, function (error) {
+      cleanupCapture(capture);
+      throw error;
+    });
+  }
+
+  function blobBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        resolve(String(reader.result || '').split(',')[1] || '');
+      };
+      reader.onerror = function () {
+        reject(reader.error || new Error('PNG could not be encoded.'));
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function pngName(name) {
+    var value = String(name || 'page')
+      .replace(/\.(?:html?|txt)$/i, '')
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .trim() || 'page';
+    return value + '.png';
+  }
+
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.style.position = 'fixed';
+    link.style.left = '-10000px';
+    link.style.top = '0';
+    link.textContent = 'Download ' + filename;
+    document.body.appendChild(link);
+
+    try {
+      link.click();
+    } catch (_) {
+      window.open(url, '_blank');
+    }
+
+    window.setTimeout(function () {
+      URL.revokeObjectURL(url);
+      link.remove();
+    }, 8000);
+  }
+
+  function zipPngs(items) {
+    if (!(window.google && google.script && google.script.run)) {
+      return Promise.reject(new Error('PNG ZIP export requires the deployed Apps Script web app.'));
+    }
+
+    return withTimeout(new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)
+        .exportPngZip(items);
+    }), 30000, 'PNG ZIP packaging timed out.');
+  }
+
+  function updateProgress(text) {
+    var node = $('pngProgress');
+    if (node) node.textContent = text || '';
+  }
+
+  function resetExportButton(button, original) {
+    if (!button) return;
+    button.disabled = false;
+    button.textContent = original;
+    updateProgress('');
+  }
+
+  function exportPng() {
+    var button = $('pngExportBtn');
+    if (!button) return;
+
+    var scope = $('pngScopeInput') ? $('pngScopeInput').value : 'current';
+    var widthValue = $('pngWidthInput') ? $('pngWidthInput').value : '1440';
+    var width = widthValue === 'current'
+      ? Math.max(390, Math.round(($('canvasStage') && $('canvasStage').clientWidth) || 1440))
+      : Number(widthValue || 1440);
+    var requestedScale = Number(($('pngScaleInput') && $('pngScaleInput').value) || 1) || 1;
+    var pages = collectSources(scope);
+
+    if (!pages.length || !pages[0].html) {
+      plus.toast('No page source is available to export.', 'error');
+      return;
+    }
+
+    button.disabled = true;
+    var original = button.textContent;
+    button.textContent = 'Rendering…';
+    updateProgress('Preparing ' + pages.length + ' page' + (pages.length === 1 ? '' : 's') + '…');
+
+    var results = [];
+    var chain = Promise.resolve();
+
+    pages.forEach(function (page, index) {
+      chain = chain.then(function () {
+        updateProgress('Rendering ' + (index + 1) + ' of ' + pages.length + ': ' + page.name);
+        return renderPage(page, width, requestedScale)
+          .then(captureBlob)
+          .then(function (blob) {
+            if (scope === 'current') {
+              updateProgress('Starting PNG download…');
+              downloadBlob(blob, pngName(page.name));
+              return;
+            }
+            return blobBase64(blob).then(function (base64) {
+              results.push({ name: pngName(page.name), base64: base64 });
+            });
+          });
+      });
+    });
+
+    chain.then(function () {
+      if (scope !== 'all') return null;
+
+      updateProgress('Packaging PNG files…');
+      return zipPngs(results).then(function (result) {
+        var raw = atob(result.base64 || '');
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        downloadBlob(
+          new Blob([bytes], { type: result.mimeType || 'application/zip' }),
+          result.name || 'html-studio-png.zip'
+        );
+      });
+    }).then(function () {
+      if ($('pngModal')) $('pngModal').classList.add('hidden');
+      plus.toast(scope === 'all' ? 'All pages exported as PNG ZIP.' : 'PNG exported.');
+      resetExportButton(button, original);
+    }).catch(function (error) {
+      console.error('[HTML Studio PNG] export failed:', error);
+      plus.toast(String(error && error.message || error || 'PNG export failed.'), 'error');
+      resetExportButton(button, original);
+    });
+  }
+
+  function init() {
+    if ($('exportPngCurrentBtn')) {
+      $('exportPngCurrentBtn').addEventListener('click', function () { openPngModal('current'); });
+    }
+    if ($('exportPngAllBtn')) {
+      $('exportPngAllBtn').addEventListener('click', function () { openPngModal('all'); });
+    }
+    if ($('pngExportBtn')) $('pngExportBtn').addEventListener('click', exportPng);
+    setStatus('ready');
+  }
+
+  window.HTMLStudioPng = {
+    renderHtmlToBlob: function (html, width, scale) {
+      var page = { name: 'page.html', html: String(html || '') };
+      return renderPage(page, Number(width || 1440), Number(scale || 1) || 1)
+        .then(captureBlob);
+    },
+    downloadBlob: downloadBlob,
+    blobBase64: blobBase64,
+    collectSources: collectSources,
+    currentName: currentName,
+    pngName: pngName
+  };
+
+  try {
+    init();
+  } catch (error) {
+    console.error('[HTML Studio] PNG module failed:', error);
+    setStatus('error');
+    plus.toast('PNG export could not initialize. HTML export remains available.', 'error');
+  }
+})();
+</script>

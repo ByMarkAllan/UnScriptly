@@ -1,0 +1,522 @@
+<script>
+(() => {
+  'use strict';
+
+  const plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  let selection = null;
+  const $ = id => document.getElementById(id);
+  const setStatus = value => document.documentElement.setAttribute('data-html-studio-linking', value);
+
+  const BLOCKED_TAGS = new Set([
+    'html','head','body','script','style','link','meta','title','base','source','track','option',
+    'table','thead','tbody','tfoot','tr','colgroup','col','ul','ol','form','input','select','textarea'
+  ]);
+
+  function clean(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  function parseStructuralPath(value) {
+    if (!value || value === 'body') return [];
+    if (!/^\d+(?:\.\d+)*$/.test(String(value))) return null;
+    return String(value).split('.').map(part => parseInt(part, 10));
+  }
+
+  function resolveStructuralPath(doc, value) {
+    if (!doc || !doc.body) return null;
+    if (value === 'body') return doc.body;
+    const parts = parseStructuralPath(value);
+    if (!parts) return null;
+    let node = doc.body;
+    for (let i = 0; i < parts.length; i++) {
+      if (!node.children || !node.children[parts[i]]) return null;
+      node = node.children[parts[i]];
+    }
+    return node;
+  }
+
+  function currentLayerPath() {
+    try {
+      if (window.HTMLStudioLayers && typeof window.HTMLStudioLayers.getActivePath === 'function') {
+        return String(window.HTMLStudioLayers.getActivePath() || '');
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function sameBasicIdentity(el) {
+    if (!el || !selection) return false;
+    if (selection.tag && String(el.tagName || '').toLowerCase() !== String(selection.tag).toLowerCase()) return false;
+    if (selection.id && el.id !== selection.id) return false;
+    return true;
+  }
+
+  function candidateElements(doc) {
+    if (!doc || !selection || !selection.tag) return [];
+    let list = [];
+    try { list = Array.from(doc.querySelectorAll(selection.tag)); }
+    catch (_) { return []; }
+
+    if (selection.classes && selection.classes.length) {
+      list = list.filter(el => selection.classes.every(name => el.classList.contains(name)));
+    }
+    return list;
+  }
+
+  /**
+   * Resolve ONLY the element the user actually selected.
+   *
+   * Previous behavior ended with `return list[0]`, which was unsafe when a page
+   * contained repeated links with the same tag/classes. The preview's legacy
+   * CSS path is not guaranteed to be unique because it does not use sibling
+   * indices. This resolver therefore:
+   *
+   * 1. Uses a real DOM id when available.
+   * 2. Uses the exact structural Layers path (child-index path) when available.
+   * 3. Uses the legacy CSS selector only when it is unique.
+   * 4. Disambiguates repeated candidates by the selected element's own text
+   *    and current href.
+   * 5. Returns null instead of silently editing the first match.
+   */
+  function selectedTarget(doc) {
+    if (!selection || !doc) return null;
+
+    if (selection.id) {
+      const byId = doc.getElementById(selection.id);
+      if (byId) return byId;
+    }
+
+    const layerPath = currentLayerPath();
+    if (layerPath) {
+      const byLayerPath = resolveStructuralPath(doc, layerPath);
+      if (byLayerPath && sameBasicIdentity(byLayerPath)) return byLayerPath;
+    }
+
+    if (selection.path) {
+      try {
+        const pathMatches = Array.from(doc.querySelectorAll(selection.path));
+        if (pathMatches.length === 1 && sameBasicIdentity(pathMatches[0])) return pathMatches[0];
+
+        if (pathMatches.length > 1) {
+          const wantedText = clean(selection.text);
+          const wantedHref = clean(selection.attrs && selection.attrs.href);
+
+          if (wantedText) {
+            const textMatches = pathMatches.filter(el => clean(el.textContent) === wantedText);
+            if (textMatches.length === 1) return textMatches[0];
+          }
+
+          if (wantedHref) {
+            const hrefMatches = pathMatches.filter(el => clean(el.getAttribute('href')) === wantedHref);
+            if (hrefMatches.length === 1) return hrefMatches[0];
+          }
+        }
+      } catch (_) {}
+    }
+
+    const candidates = candidateElements(doc);
+    if (candidates.length === 1) return candidates[0];
+
+    const wantedText = clean(selection.text);
+    const wantedHref = clean(selection.attrs && selection.attrs.href);
+
+    if (wantedText) {
+      const textMatches = candidates.filter(el => clean(el.textContent) === wantedText);
+      if (textMatches.length === 1) return textMatches[0];
+
+      if (wantedHref && textMatches.length > 1) {
+        const exact = textMatches.filter(el => clean(el.getAttribute('href')) === wantedHref);
+        if (exact.length === 1) return exact[0];
+      }
+    }
+
+    if (wantedHref) {
+      const hrefMatches = candidates.filter(el => clean(el.getAttribute('href')) === wantedHref);
+      if (hrefMatches.length === 1) return hrefMatches[0];
+    }
+
+    return null;
+  }
+
+  function serializeSource(doc, original) {
+    const prefix = /^\s*<!doctype\s+html[^>]*>/i.test(String(original || ''))
+      ? '<!DOCTYPE html>\n'
+      : '';
+    return prefix + doc.documentElement.outerHTML;
+  }
+
+  function patchExactSelected(mutator, message) {
+    if (!selection) {
+      plus.toast('Select the exact element you want to link first.', 'error');
+      return false;
+    }
+
+    return plus.withSource(source => {
+      const doc = new DOMParser().parseFromString(String(source || ''), 'text/html');
+      const target = selectedTarget(doc);
+
+      if (!target) {
+        plus.toast(
+          'UnScriptly could not uniquely identify that element. Select the element again (or select it from Layers) and retry. No other links were changed.',
+          'error'
+        );
+        return source;
+      }
+
+      mutator(target, doc);
+      return serializeSource(doc, source);
+    }, message || 'Selected element updated.');
+  }
+
+  function meaningfulChildren(link) {
+    return Array.from(link.childNodes || []).filter(node => {
+      if (node.nodeType === 3) return String(node.textContent || '').trim().length > 0;
+      return node.nodeType === 1;
+    });
+  }
+
+  function managedLinkForTarget(target) {
+    if (!target) return null;
+    if (target.tagName && target.tagName.toLowerCase() === 'a') {
+      return { link: target, direct: true, wrapper: false };
+    }
+
+    const parent = target.parentElement;
+    if (parent && parent.tagName && parent.tagName.toLowerCase() === 'a') {
+      const meaningful = meaningfulChildren(parent);
+      if (meaningful.length === 1 && meaningful[0] === target) {
+        return {
+          link: parent,
+          direct: false,
+          wrapper: parent.getAttribute('data-unscriptly-link-wrapper') === 'true'
+        };
+      }
+    }
+    return null;
+  }
+
+  function sourceState() {
+    const source = plus.readSource();
+    if (!source || !selection) return null;
+
+    try {
+      const doc = new DOMParser().parseFromString(source, 'text/html');
+      const target = selectedTarget(doc);
+      if (!target) return null;
+      const managed = managedLinkForTarget(target);
+
+      return {
+        target,
+        link: managed ? managed.link : null,
+        enabled: Boolean(managed && managed.link.getAttribute('href')),
+        href: managed ? (managed.link.getAttribute('href') || '') : '',
+        newTab: Boolean(managed && managed.link.getAttribute('target') === '_blank'),
+        wrapper: Boolean(managed && managed.wrapper)
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function isEligible() {
+    if (!selection || !selection.tag) return false;
+    return !BLOCKED_TAGS.has(String(selection.tag).toLowerCase());
+  }
+
+  function buildUi() {
+    const content = $('contentControls');
+    if (!content || $('universalLinkControls')) return;
+
+    const legacy = $('linkControls');
+    if (legacy) {
+      legacy.style.display = 'none';
+      legacy.setAttribute('aria-hidden', 'true');
+    }
+
+    const panel = document.createElement('div');
+    panel.id = 'universalLinkControls';
+    panel.className = 'universal-link-controls hidden';
+    panel.innerHTML = `
+      <div class="universal-link-head">
+        <label class="check-row universal-link-toggle-row">
+          <input id="universalLinkEnabledInput" type="checkbox">
+          <strong>Link URL</strong>
+        </label>
+        <span class="universal-link-state" id="universalLinkState">Off</span>
+      </div>
+      <div id="universalLinkFields" class="universal-link-fields hidden">
+        <label class="field-label" for="universalLinkUrlInput">Destination URL</label>
+        <input id="universalLinkUrlInput" class="field" type="text"
+          placeholder="https://…, page.html, /route, or #section">
+        <label class="check-row">
+          <input id="universalLinkNewTabInput" type="checkbox"> Open in new tab
+        </label>
+        <button id="applyUniversalLinkBtn" class="button secondary full-width-button"
+          type="button">Apply Link URL</button>
+        <div class="field-help" id="universalLinkHelp">
+          Applies only to the exact selected element.
+        </div>
+      </div>`;
+
+    const textHelp = content.querySelector('.field-help');
+    if (textHelp && textHelp.parentNode === content) {
+      textHelp.insertAdjacentElement('afterend', panel);
+    } else {
+      content.insertBefore(panel, content.firstChild);
+    }
+  }
+
+  function refreshUi() {
+    const panel = $('universalLinkControls');
+    if (!panel) return;
+
+    const eligible = isEligible();
+    panel.classList.toggle('hidden', !eligible);
+    if (!eligible) return;
+
+    const legacy = $('linkControls');
+    if (legacy) legacy.style.display = 'none';
+
+    const state = sourceState();
+    const enabled = $('universalLinkEnabledInput');
+    const fields = $('universalLinkFields');
+    const url = $('universalLinkUrlInput');
+    const tab = $('universalLinkNewTabInput');
+    const label = $('universalLinkState');
+    const help = $('universalLinkHelp');
+
+    if (enabled) enabled.checked = Boolean(state && state.enabled);
+    if (fields) fields.classList.toggle('hidden', !(state && state.enabled));
+    if (url) url.value = state ? state.href : '';
+    if (tab) tab.checked = Boolean(state && state.newTab);
+    if (label) label.textContent = state && state.enabled ? 'On' : 'Off';
+
+    if (help) {
+      const source = plus.readSource();
+      let note = 'Applies only to the exact selected element. Other links in the same Frame, Group, footer, card, or navigation are not changed.';
+
+      if (source && selection) {
+        try {
+          const doc = new DOMParser().parseFromString(source, 'text/html');
+          const target = selectedTarget(doc);
+
+          if (!target) {
+            note = 'This selection is ambiguous in the source. Re-select the exact element or choose it from Layers before applying a URL.';
+          } else if (
+            target.tagName.toLowerCase() !== 'a' &&
+            target.tagName.toLowerCase() !== 'button' &&
+            target.querySelector &&
+            target.querySelector('a,button,input,select,textarea')
+          ) {
+            note += ' This container contains interactive children, so link a leaf element instead.';
+          }
+        } catch (_) {}
+      }
+
+      help.textContent = note;
+    }
+  }
+
+  function setLink() {
+    if (!isEligible()) {
+      plus.toast('Select a visible page element first.', 'error');
+      return false;
+    }
+
+    const href = String(
+      ($('universalLinkUrlInput') && $('universalLinkUrlInput').value) || ''
+    ).trim();
+
+    if (!href) {
+      plus.toast('Enter a Link URL first.', 'error');
+      const input = $('universalLinkUrlInput');
+      if (input) input.focus();
+      return false;
+    }
+
+    const newTab = Boolean(
+      $('universalLinkNewTabInput') &&
+      $('universalLinkNewTabInput').checked
+    );
+
+    return patchExactSelected((target, doc) => {
+      const tag = target.tagName.toLowerCase();
+
+      if (
+        tag !== 'a' &&
+        tag !== 'button' &&
+        target.querySelector &&
+        target.querySelector('a,button,input,select,textarea')
+      ) {
+        throw new Error('Container contains interactive descendants. Link a leaf element instead.');
+      }
+
+      let link = null;
+      const existing = managedLinkForTarget(target);
+
+      if (existing) {
+        link = existing.link;
+      } else if (tag === 'button') {
+        link = doc.createElement('a');
+
+        Array.from(target.attributes).forEach(attr => {
+          if (![
+            'type','form','formaction','formmethod','formenctype',
+            'formtarget','disabled'
+          ].includes(attr.name.toLowerCase())) {
+            link.setAttribute(attr.name, attr.value);
+          }
+        });
+
+        link.innerHTML = target.innerHTML;
+        link.setAttribute('data-unscriptly-original-tag', 'button');
+        link.setAttribute('role', link.getAttribute('role') || 'button');
+        target.parentNode.replaceChild(link, target);
+      } else {
+        link = doc.createElement('a');
+        link.setAttribute('data-unscriptly-link-wrapper', 'true');
+        link.setAttribute(
+          'style',
+          'display:contents;color:inherit;text-decoration:inherit;'
+        );
+        target.parentNode.insertBefore(link, target);
+        link.appendChild(target);
+      }
+
+      link.setAttribute('href', href);
+      link.setAttribute('data-unscriptly-link-enabled', 'true');
+      link.setAttribute(
+        'data-unscriptly-navigation',
+        href.charAt(0) === '#' ? 'anchor' : 'url'
+      );
+
+      if (newTab) {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+      } else {
+        link.removeAttribute('target');
+        link.removeAttribute('rel');
+      }
+    }, 'Link URL applied to selected element only.');
+  }
+
+  function clearLink() {
+    if (!selection) return false;
+
+    return patchExactSelected((target, doc) => {
+      const managed = managedLinkForTarget(target);
+      if (!managed) return;
+
+      const link = managed.link;
+
+      if (link.getAttribute('data-unscriptly-link-wrapper') === 'true') {
+        const parent = link.parentNode;
+        while (link.firstChild) parent.insertBefore(link.firstChild, link);
+        parent.removeChild(link);
+        return;
+      }
+
+      if (link.getAttribute('data-unscriptly-original-tag') === 'button') {
+        const button = doc.createElement('button');
+
+        Array.from(link.attributes).forEach(attr => {
+          if (![
+            'href','target','rel','role','data-unscriptly-original-tag',
+            'data-unscriptly-link-enabled','data-unscriptly-navigation'
+          ].includes(attr.name.toLowerCase())) {
+            button.setAttribute(attr.name, attr.value);
+          }
+        });
+
+        button.setAttribute('type', 'button');
+        button.innerHTML = link.innerHTML;
+        link.parentNode.replaceChild(button, link);
+        return;
+      }
+
+      link.removeAttribute('href');
+      link.removeAttribute('target');
+      link.removeAttribute('rel');
+      link.removeAttribute('data-unscriptly-link-enabled');
+      link.removeAttribute('data-unscriptly-navigation');
+    }, 'Link URL removed from selected element only.');
+  }
+
+  function bind() {
+    buildUi();
+
+    const toggle = $('universalLinkEnabledInput');
+    if (toggle) {
+      toggle.addEventListener('change', () => {
+        const fields = $('universalLinkFields');
+        const label = $('universalLinkState');
+
+        if (toggle.checked) {
+          if (fields) fields.classList.remove('hidden');
+          if (label) label.textContent = 'On';
+
+          const input = $('universalLinkUrlInput');
+          if (input) window.setTimeout(() => input.focus(), 0);
+        } else {
+          if (fields) fields.classList.add('hidden');
+          if (label) label.textContent = 'Off';
+          clearLink();
+        }
+      });
+    }
+
+    const apply = $('applyUniversalLinkBtn');
+    if (apply) apply.addEventListener('click', setLink);
+
+    const url = $('universalLinkUrlInput');
+    if (url) {
+      url.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          setLink();
+        }
+      });
+    }
+
+    document.addEventListener('htmlstudio:plus-selection', event => {
+      selection = event.detail || null;
+      window.setTimeout(refreshUi, 20);
+    });
+
+    document.addEventListener(
+      'htmlstudio:plus-preview-ready',
+      () => window.setTimeout(refreshUi, 80)
+    );
+
+    // The Layers bridge provides the exact child-index path for canvas clicks.
+    // Refresh again after it has synchronized so the Inspector always reflects
+    // the exact selected link rather than a repeated sibling.
+    window.addEventListener('message', event => {
+      const frame = $('previewFrame');
+      if (!frame || event.source !== frame.contentWindow) return;
+      const msg = event.data || {};
+      if (
+        msg.source === 'unscriptly-html-studio' &&
+        msg.type === 'NCE_LAYER_SELECTED_PATH'
+      ) {
+        window.setTimeout(refreshUi, 0);
+      }
+    });
+
+    setStatus('ready');
+  }
+
+  try {
+    bind();
+  } catch (error) {
+    console.error('[HTML Studio] Universal Link URL module failed:', error);
+    setStatus('error');
+    plus.toast(
+      'Universal Link URL controls could not initialize. Core editing remains available.',
+      'error'
+    );
+  }
+})();
+</script>

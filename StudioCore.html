@@ -1,0 +1,1290 @@
+<script>
+(() => {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+  const els = {
+    fileInput: $('fileInput'),
+    emptyUploadBtn: $('emptyUploadBtn'),
+    pasteBtn: $('pasteBtn'),
+    emptyPasteBtn: $('emptyPasteBtn'),
+    addPageBtn: $('addPageBtn'),
+    pageList: $('pageList'),
+    currentPageLabel: $('currentPageLabel'),
+    emptyState: $('emptyState'),
+    previewShell: $('previewShell'),
+    previewFrame: $('previewFrame'),
+    loadingOverlay: $('loadingOverlay'),
+    analysisStats: $('analysisStats'),
+    analysisIssues: $('analysisIssues'),
+    analysisStatus: $('analysisStatus'),
+    selectModeBtn: $('selectModeBtn'),
+    interactModeBtn: $('interactModeBtn'),
+    viewportLabel: $('viewportLabel'),
+    refreshBtn: $('refreshBtn'),
+    undoBtn: $('undoBtn'),
+    redoBtn: $('redoBtn'),
+    codeBtn: $('codeBtn'),
+    copyBtn: $('copyBtn'),
+    exportBtn: $('exportBtn'),
+    codeDrawer: $('codeDrawer'),
+    drawerBackdrop: $('drawerBackdrop'),
+    codeDrawerTitle: $('codeDrawerTitle'),
+    codeEditor: $('codeEditor'),
+    codeStatus: $('codeStatus'),
+    closeCodeBtn: $('closeCodeBtn'),
+    applyCodeBtn: $('applyCodeBtn'),
+    formatCodeBtn: $('formatCodeBtn'),
+    pasteModal: $('pasteModal'),
+    pastePageName: $('pastePageName'),
+    pasteHtmlInput: $('pasteHtmlInput'),
+    importPasteBtn: $('importPasteBtn'),
+    exportModal: $('exportModal'),
+    exportCurrentBtn: $('exportCurrentBtn'),
+    exportAllBtn: $('exportAllBtn'),
+    exportCopyBtn: $('exportCopyBtn'),
+    selectedElementTitle: $('selectedElementTitle'),
+    selectionPath: $('selectionPath'),
+    inspectorEmpty: $('inspectorEmpty'),
+    inspectorContent: $('inspectorContent'),
+    linkControls: $('linkControls'),
+    imageControls: $('imageControls'),
+    textContentInput: $('textContentInput'),
+    hrefInput: $('hrefInput'),
+    newTabInput: $('newTabInput'),
+    srcInput: $('srcInput'),
+    altInput: $('altInput'),
+    fontSizeInput: $('fontSizeInput'),
+    fontWeightInput: $('fontWeightInput'),
+    textColorPicker: $('textColorPicker'),
+    textColorInput: $('textColorInput'),
+    backgroundColorPicker: $('backgroundColorPicker'),
+    backgroundColorInput: $('backgroundColorInput'),
+    borderRadiusInput: $('borderRadiusInput'),
+    opacityInput: $('opacityInput'),
+    borderWidthInput: $('borderWidthInput'),
+    borderStyleInput: $('borderStyleInput'),
+    borderColorInput: $('borderColorInput'),
+    widthInput: $('widthInput'),
+    heightInput: $('heightInput'),
+    paddingInput: $('paddingInput'),
+    marginInput: $('marginInput'),
+    displayInput: $('displayInput'),
+    duplicateElementBtn: $('duplicateElementBtn'),
+    deleteElementBtn: $('deleteElementBtn'),
+    toastRegion: $('toastRegion'),
+    pagesToggleBtn: $('pagesToggleBtn'),
+    inspectorToggleBtn: $('inspectorToggleBtn'),
+    inspectorCloseBtn: $('inspectorCloseBtn'),
+    leftPanel: $('leftPanel'),
+    inspectorPanel: $('inspectorPanel')
+  };
+
+  const state = {
+    pages: [],
+    activePageId: null,
+    mode: 'select',
+    device: 'desktop',
+    renderToken: null,
+    selected: null,
+    codeDirty: false,
+    pagePopover: null
+  };
+
+  const BLANK_PAGE = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Untitled Page</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; color: #111; background: #fff; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 48px 24px; }
+    .card { width: min(680px, 100%); padding: 48px; border: 1px solid #ddd; border-radius: 18px; }
+    h1 { margin: 0 0 12px; font-size: 48px; line-height: 1; }
+    p { margin: 0; color: #666; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Start editing.</h1>
+      <p>Choose Select mode and click any element to change its text, color, size, spacing, and more.</p>
+    </section>
+  </main>
+</body>
+</html>`;
+
+  function uid() {
+    return 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  }
+
+  function activePage() {
+    return state.pages.find(page => page.id === state.activePageId) || null;
+  }
+
+  function cleanFilename(name, fallback = 'page.html') {
+    let value = String(name || fallback).trim().replace(/[\\/:*?"<>|]+/g, '-');
+    if (!value) value = fallback;
+    if (!/\.html?$/i.test(value)) value += '.html';
+    return value;
+  }
+
+  function uniquePageName(name, ignoreId = null) {
+    const base = cleanFilename(name);
+    const existing = new Set(state.pages.filter(p => p.id !== ignoreId).map(p => p.name.toLowerCase()));
+    if (!existing.has(base.toLowerCase())) return base;
+    const match = base.match(/^(.*?)(\.(?:html?))$/i);
+    const stem = match ? match[1] : base;
+    const ext = match ? match[2] : '.html';
+    let n = 2;
+    while (existing.has(`${stem}-${n}${ext}`.toLowerCase())) n++;
+    return `${stem}-${n}${ext}`;
+  }
+
+  function createPage(name, html, options = {}) {
+    const page = {
+      id: uid(),
+      name: uniquePageName(name || 'index.html'),
+      html: String(html || ''),
+      analysis: null,
+      history: [],
+      historyIndex: -1,
+      historyGroup: null
+    };
+    page.analysis = analyzeHtml(page.html);
+    page.history.push({ html: page.html, key: 'initial', at: Date.now() });
+    page.historyIndex = 0;
+    state.pages.push(page);
+    renderPageList();
+    if (options.activate !== false) setActivePage(page.id);
+    return page;
+  }
+
+  function setActivePage(pageId) {
+    if (!state.pages.some(p => p.id === pageId)) return;
+    state.activePageId = pageId;
+    state.selected = null;
+    state.codeDirty = false;
+    renderPageList();
+    renderActivePage();
+    closeMobilePanels();
+  }
+
+  function renderPageList() {
+    els.pageList.innerHTML = '';
+    if (!state.pages.length) {
+      const empty = document.createElement('div');
+      empty.className = 'issue-card good';
+      empty.innerHTML = '<span class="issue-dot"></span><div class="issue-text">No pages yet. Upload or paste HTML to begin.</div>';
+      els.pageList.appendChild(empty);
+      return;
+    }
+
+    state.pages.forEach(page => {
+      const button = document.createElement('div');
+      button.className = 'page-item' + (page.id === state.activePageId ? ' active' : '');
+      button.setAttribute('role', 'button');
+      button.tabIndex = 0;
+      button.innerHTML = `
+        <span class="page-icon">H</span>
+        <span class="page-meta">
+          <span class="page-name"></span>
+          <span class="page-detail"></span>
+        </span>
+        <button class="icon-btn page-menu-btn" type="button" aria-label="Page actions">···</button>`;
+      button.querySelector('.page-name').textContent = page.name;
+      const sizeKb = Math.max(0.1, new Blob([page.html]).size / 1024).toFixed(1);
+      button.querySelector('.page-detail').textContent = `${page.analysis.stats.elements} elements · ${sizeKb} KB`;
+      button.addEventListener('click', () => setActivePage(page.id));
+      button.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') setActivePage(page.id);
+      });
+      button.querySelector('.page-menu-btn').addEventListener('click', (event) => {
+        event.stopPropagation();
+        showPagePopover(event.currentTarget, page);
+      });
+      els.pageList.appendChild(button);
+    });
+  }
+
+  function showPagePopover(anchor, page) {
+    closePagePopover();
+    const pop = document.createElement('div');
+    pop.className = 'page-popover';
+    pop.innerHTML = `
+      <button type="button" data-action="rename">Rename</button>
+      <button type="button" data-action="duplicate">Duplicate page</button>
+      <button type="button" data-action="delete" class="danger-text">Delete</button>`;
+    document.body.appendChild(pop);
+    const rect = anchor.getBoundingClientRect();
+    pop.style.position = 'fixed';
+    pop.style.zIndex = '140';
+    pop.style.left = Math.max(8, rect.right - 150) + 'px';
+    pop.style.top = Math.min(window.innerHeight - 128, rect.bottom + 4) + 'px';
+    state.pagePopover = pop;
+
+    pop.addEventListener('click', (event) => {
+      const action = event.target.closest('button')?.dataset.action;
+      if (!action) return;
+      if (action === 'rename') renamePage(page);
+      if (action === 'duplicate') duplicatePage(page);
+      if (action === 'delete') deletePage(page);
+      closePagePopover();
+    });
+  }
+
+  function closePagePopover() {
+    if (state.pagePopover) state.pagePopover.remove();
+    state.pagePopover = null;
+  }
+
+  function renamePage(page) {
+    const next = window.prompt('Rename page', page.name);
+    if (next === null) return;
+    page.name = uniquePageName(next, page.id);
+    renderPageList();
+    if (page.id === state.activePageId) {
+      els.currentPageLabel.textContent = page.name;
+      els.codeDrawerTitle.textContent = page.name;
+    }
+  }
+
+  function duplicatePage(page) {
+    const match = page.name.match(/^(.*?)(\.(?:html?))$/i);
+    const base = match ? `${match[1]}-copy${match[2]}` : `${page.name}-copy.html`;
+    createPage(base, page.html);
+    toast('Page duplicated.');
+  }
+
+  function deletePage(page) {
+    if (!window.confirm(`Delete “${page.name}” from this workspace?`)) return;
+    const index = state.pages.findIndex(p => p.id === page.id);
+    state.pages.splice(index, 1);
+    if (state.activePageId === page.id) {
+      state.activePageId = state.pages[index]?.id || state.pages[index - 1]?.id || null;
+      state.selected = null;
+    }
+    renderPageList();
+    renderActivePage();
+  }
+
+  function renderActivePage() {
+    const page = activePage();
+    if (!page) {
+      els.emptyState.classList.remove('hidden');
+      els.previewShell.classList.add('hidden');
+      els.currentPageLabel.textContent = 'No page loaded';
+      clearInspector();
+      renderAnalysis(null);
+      updateHistoryButtons();
+      return;
+    }
+
+    els.emptyState.classList.add('hidden');
+    els.previewShell.classList.remove('hidden');
+    els.currentPageLabel.textContent = page.name;
+    els.codeDrawerTitle.textContent = page.name;
+    renderAnalysis(page.analysis);
+    updateHistoryButtons();
+    clearInspector();
+    renderPreview();
+
+    if (els.codeDrawer.classList.contains('open') && !state.codeDirty) {
+      els.codeEditor.value = page.html;
+      setCodeStatus(false);
+    }
+  }
+
+  function analyzeHtml(html) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(String(html || ''), 'text/html');
+    const all = Array.from(doc.body.querySelectorAll('*'));
+    const images = Array.from(doc.querySelectorAll('img'));
+    const links = Array.from(doc.querySelectorAll('a'));
+    const buttons = Array.from(doc.querySelectorAll('button,[role="button"],input[type="button"],input[type="submit"]'));
+    const inputs = Array.from(doc.querySelectorAll('input:not([type="hidden"]),textarea,select'));
+    const ids = Array.from(doc.querySelectorAll('[id]')).map(el => el.id).filter(Boolean);
+    const duplicateIds = Array.from(new Set(ids.filter((id, i) => ids.indexOf(id) !== i)));
+    const unlabeledInputs = inputs.filter(input => {
+      const id = input.id;
+      const hasLabel = id && doc.querySelector(`label[for="${cssEscape(id)}"]`);
+      return !hasLabel && !input.closest('label') && !input.getAttribute('aria-label') && !input.getAttribute('aria-labelledby');
+    });
+    const emptyInteractive = [...links, ...buttons].filter(el => !String(el.textContent || el.value || el.getAttribute('aria-label') || '').trim());
+    const hasDoctype = /^\s*<!doctype\s+html/i.test(String(html || ''));
+    const hasViewport = !!doc.querySelector('meta[name="viewport"]');
+    const title = String(doc.querySelector('title')?.textContent || '').trim();
+    const issues = [];
+
+    if (!hasDoctype) issues.push({ level: 'warning', text: 'Missing <!DOCTYPE html>. Standards mode is recommended.' });
+    if (!title) issues.push({ level: 'warning', text: 'No document title was found.' });
+    if (!hasViewport) issues.push({ level: 'warning', text: 'Missing viewport meta tag for responsive mobile scaling.' });
+    const missingAlt = images.filter(img => !img.hasAttribute('alt')).length;
+    if (missingAlt) issues.push({ level: 'warning', text: `${missingAlt} image${missingAlt === 1 ? '' : 's'} missing alt text.` });
+    if (duplicateIds.length) issues.push({ level: 'warning', text: `${duplicateIds.length} duplicate ID${duplicateIds.length === 1 ? '' : 's'} detected.` });
+    if (unlabeledInputs.length) issues.push({ level: 'warning', text: `${unlabeledInputs.length} form control${unlabeledInputs.length === 1 ? '' : 's'} may be missing a label.` });
+    if (emptyInteractive.length) issues.push({ level: 'warning', text: `${emptyInteractive.length} interactive element${emptyInteractive.length === 1 ? '' : 's'} may be missing accessible text.` });
+    if (!issues.length) issues.push({ level: 'good', text: 'No obvious structural or accessibility issues detected.' });
+
+    return {
+      title,
+      stats: {
+        elements: all.length,
+        headings: doc.querySelectorAll('h1,h2,h3,h4,h5,h6').length,
+        links: links.length,
+        images: images.length,
+        forms: doc.querySelectorAll('form').length,
+        scripts: doc.querySelectorAll('script').length
+      },
+      issues
+    };
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && CSS.escape) return CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  }
+
+  function renderAnalysis(analysis) {
+    if (!analysis) {
+      els.analysisStats.innerHTML = '';
+      els.analysisIssues.innerHTML = '<div class="issue-card good"><span class="issue-dot"></span><div class="issue-text">Import a page to analyze its structure.</div></div>';
+      els.analysisStatus.style.background = '#aaa';
+      return;
+    }
+    const items = [
+      ['Elements', analysis.stats.elements],
+      ['Headings', analysis.stats.headings],
+      ['Links', analysis.stats.links],
+      ['Images', analysis.stats.images],
+      ['Forms', analysis.stats.forms],
+      ['Scripts', analysis.stats.scripts]
+    ];
+    els.analysisStats.innerHTML = items.map(([label, value]) => `
+      <div class="stat-card"><div class="stat-value">${value}</div><div class="stat-label">${label}</div></div>`).join('');
+    els.analysisIssues.innerHTML = '';
+    analysis.issues.forEach(issue => {
+      const card = document.createElement('div');
+      card.className = 'issue-card' + (issue.level === 'good' ? ' good' : '');
+      card.innerHTML = '<span class="issue-dot"></span><div class="issue-text"></div>';
+      card.querySelector('.issue-text').textContent = issue.text;
+      els.analysisIssues.appendChild(card);
+    });
+    const hasWarnings = analysis.issues.some(i => i.level !== 'good');
+    els.analysisStatus.style.background = hasWarnings ? '#c67700' : '#1c7c54';
+  }
+
+  function renderPreview() {
+    const page = activePage();
+    if (!page) return;
+    state.renderToken = uid();
+    els.loadingOverlay.classList.remove('hidden');
+    const previewDoc = buildPreviewDocument(page.html, state.renderToken);
+    els.previewFrame.srcdoc = previewDoc;
+  }
+
+  function buildPreviewDocument(html, token) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(String(html || ''), 'text/html');
+
+    // A page-level CSP can block the editor bridge. Disable it only in the sandboxed
+    // preview copy, then restore the original attribute during clean serialization.
+    doc.querySelectorAll('meta[http-equiv]').forEach(meta => {
+      const httpEquiv = String(meta.getAttribute('http-equiv') || '');
+      if (httpEquiv.toLowerCase() === 'content-security-policy') {
+        meta.setAttribute('data-unscriptly-csp-http-equiv', httpEquiv);
+        meta.removeAttribute('http-equiv');
+      }
+    });
+
+    const helperStyle = doc.createElement('style');
+    helperStyle.id = '__unscriptly_editor_style__';
+    helperStyle.textContent = `
+      [data-unscriptly-hover="1"] { outline: 2px dashed rgba(17,17,17,.65) !important; outline-offset: 2px !important; cursor: crosshair !important; }
+      [data-unscriptly-selected="1"] { outline: 2px solid #111 !important; outline-offset: 2px !important; }
+      html[data-unscriptly-mode="select"], html[data-unscriptly-mode="select"] body { cursor: default; }
+    `;
+    doc.head.appendChild(helperStyle);
+
+    const bridge = doc.createElement('script');
+    bridge.id = '__unscriptly_editor_bridge__';
+    bridge.textContent = `(${previewBridge.toString()})(${JSON.stringify(token)}, ${JSON.stringify(state.mode)});`;
+    doc.body.appendChild(bridge);
+
+    return serializeDocument(doc);
+  }
+
+  function serializeDocument(doc) {
+    let doctype = '';
+    if (doc.doctype) {
+      doctype = '<!DOCTYPE ' + doc.doctype.name;
+      if (doc.doctype.publicId) doctype += ' PUBLIC "' + doc.doctype.publicId + '"';
+      if (doc.doctype.systemId) doctype += ' "' + doc.doctype.systemId + '"';
+      doctype += '>\n';
+    }
+    return doctype + doc.documentElement.outerHTML;
+  }
+
+  function previewBridge(token, initialMode) {
+    const SOURCE = 'unscriptly-html-studio';
+    const ID_ATTR = 'data-unscriptly-editor-id';
+    let mode = initialMode || 'select';
+    let selectedId = null;
+    let counter = 1;
+
+    function post(type, payload) {
+      parent.postMessage(Object.assign({ source: SOURCE, type, token }, payload || {}), '*');
+    }
+
+    function assignIds(root) {
+      const nodes = [];
+      if (root && root.nodeType === 1) nodes.push(root);
+      if (root && root.querySelectorAll) root.querySelectorAll('*').forEach(el => nodes.push(el));
+      nodes.forEach(el => {
+        const tag = String(el.tagName || '').toLowerCase();
+        if (['script','style','meta','link','title','base','head','html'].includes(tag)) return;
+        if (!el.hasAttribute(ID_ATTR)) el.setAttribute(ID_ATTR, 'u_' + counter++);
+      });
+    }
+
+    function cleanCloneHtml() {
+      const clone = document.documentElement.cloneNode(true);
+      clone.querySelector('#__unscriptly_editor_bridge__')?.remove();
+      clone.querySelector('#__unscriptly_editor_style__')?.remove();
+      clone.querySelectorAll('[' + ID_ATTR + ']').forEach(el => el.removeAttribute(ID_ATTR));
+      clone.querySelectorAll('[data-unscriptly-hover]').forEach(el => el.removeAttribute('data-unscriptly-hover'));
+      clone.querySelectorAll('[data-unscriptly-selected]').forEach(el => el.removeAttribute('data-unscriptly-selected'));
+      clone.querySelectorAll('meta[data-unscriptly-csp-http-equiv]').forEach(meta => {
+        meta.setAttribute('http-equiv', meta.getAttribute('data-unscriptly-csp-http-equiv') || 'Content-Security-Policy');
+        meta.removeAttribute('data-unscriptly-csp-http-equiv');
+      });
+      clone.removeAttribute('data-unscriptly-mode');
+      let dt = '';
+      if (document.doctype) {
+        dt = '<!DOCTYPE ' + document.doctype.name;
+        if (document.doctype.publicId) dt += ' PUBLIC "' + document.doctype.publicId + '"';
+        if (document.doctype.systemId) dt += ' "' + document.doctype.systemId + '"';
+        dt += '>\n';
+      }
+      return dt + clone.outerHTML;
+    }
+
+    function pathFor(el) {
+      if (!el) return '';
+      const parts = [];
+      let node = el;
+      while (node && node.nodeType === 1 && node !== document.body.parentElement) {
+        let part = String(node.tagName || '').toLowerCase();
+        if (node.id) part += '#' + node.id;
+        else if (node.classList && node.classList.length) part += '.' + Array.from(node.classList).slice(0, 2).join('.');
+        parts.unshift(part);
+        if (node === document.body) break;
+        node = node.parentElement;
+      }
+      return parts.join(' > ');
+    }
+
+    function infoFor(el) {
+      const cs = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      const tag = String(el.tagName || '').toLowerCase();
+      return {
+        editorId: el.getAttribute(ID_ATTR),
+        tag,
+        id: el.id || '',
+        classes: Array.from(el.classList || []),
+        path: pathFor(el),
+        text: tag === 'input' || tag === 'textarea' ? (el.value || '') : (el.innerText || el.textContent || '').trim().slice(0, 10000),
+        attrs: {
+          href: el.getAttribute('href') || '',
+          target: el.getAttribute('target') || '',
+          src: el.getAttribute('src') || '',
+          alt: el.getAttribute('alt') || ''
+        },
+        styles: {
+          color: cs.color,
+          backgroundColor: cs.backgroundColor,
+          fontSize: cs.fontSize,
+          fontWeight: cs.fontWeight,
+          textAlign: cs.textAlign,
+          width: cs.width,
+          height: cs.height,
+          padding: cs.padding,
+          margin: cs.margin,
+          borderRadius: cs.borderRadius,
+          opacity: cs.opacity,
+          display: cs.display,
+          borderWidth: cs.borderWidth,
+          borderStyle: cs.borderStyle,
+          borderColor: cs.borderColor
+        },
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      };
+    }
+
+    function selectElement(el) {
+      document.querySelectorAll('[data-unscriptly-selected="1"]').forEach(node => node.removeAttribute('data-unscriptly-selected'));
+      selectedId = el ? el.getAttribute(ID_ATTR) : null;
+      if (el) {
+        el.setAttribute('data-unscriptly-selected', '1');
+        post('NCE_SELECTED', { element: infoFor(el) });
+      } else {
+        post('NCE_DESELECTED');
+      }
+    }
+
+    function elementById(id) {
+      if (!id) return null;
+      return document.querySelector('[' + ID_ATTR + '="' + String(id).replace(/"/g, '\\"') + '"]');
+    }
+
+    function notifyMutation(el, key) {
+      post('NCE_DOCUMENT', { html: cleanCloneHtml(), key: key || 'visual-change' });
+      if (el && document.documentElement.contains(el)) post('NCE_SELECTED', { element: infoFor(el) });
+    }
+
+    assignIds(document.body);
+    document.documentElement.setAttribute('data-unscriptly-mode', mode);
+
+    document.addEventListener('mouseover', event => {
+      if (mode !== 'select') return;
+      const el = event.target.closest('[' + ID_ATTR + ']');
+      if (!el || el.id === '__unscriptly_editor_bridge__') return;
+      document.querySelectorAll('[data-unscriptly-hover="1"]').forEach(node => node.removeAttribute('data-unscriptly-hover'));
+      if (el.getAttribute(ID_ATTR) !== selectedId) el.setAttribute('data-unscriptly-hover', '1');
+    }, true);
+
+    document.addEventListener('mouseout', event => {
+      if (mode !== 'select') return;
+      const el = event.target.closest?.('[' + ID_ATTR + ']');
+      if (el) el.removeAttribute('data-unscriptly-hover');
+    }, true);
+
+    document.addEventListener('click', event => {
+      const anchor = event.target.closest?.('a[href]');
+      if (mode === 'interact') {
+        if (anchor) {
+          const rawHref = anchor.getAttribute('href') || '';
+          const lower = rawHref.toLowerCase();
+          const isLocalPage = rawHref && !rawHref.startsWith('#') && !/^(https?:|mailto:|tel:|javascript:|data:)/i.test(lower);
+          if (isLocalPage) {
+            event.preventDefault();
+            post('NCE_NAVIGATE', { href: rawHref });
+          }
+        }
+        return;
+      }
+
+      const el = event.target.closest?.('[' + ID_ATTR + ']');
+      if (!el) return;
+      event.preventDefault();
+      event.stopPropagation();
+      el.removeAttribute('data-unscriptly-hover');
+      selectElement(el);
+    }, true);
+
+    document.addEventListener('submit', event => {
+      if (mode === 'select') event.preventDefault();
+    }, true);
+
+    window.addEventListener('message', event => {
+      const msg = event.data || {};
+      if (msg.source !== SOURCE || msg.token !== token) return;
+
+      if (msg.type === 'NCE_SET_MODE') {
+        mode = msg.mode === 'interact' ? 'interact' : 'select';
+        document.documentElement.setAttribute('data-unscriptly-mode', mode);
+        document.querySelectorAll('[data-unscriptly-hover]').forEach(el => el.removeAttribute('data-unscriptly-hover'));
+        return;
+      }
+
+      if (msg.type === 'NCE_SCROLL_TO' && msg.hash) {
+        const target = document.getElementById(String(msg.hash).replace(/^#/, ''));
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+
+      if (msg.type !== 'NCE_APPLY') return;
+      const el = elementById(msg.editorId || selectedId);
+      if (!el) return;
+
+      if (msg.operation === 'style') {
+        if (msg.value === '' || msg.value == null) el.style.removeProperty(msg.property);
+        else el.style.setProperty(msg.property, String(msg.value));
+        notifyMutation(el, 'style:' + msg.property);
+        return;
+      }
+
+      if (msg.operation === 'text') {
+        const nextText = String(msg.value || '');
+        if (el.tagName === 'INPUT') {
+          el.value = nextText;
+          el.setAttribute('value', nextText);
+        } else if (el.tagName === 'TEXTAREA') {
+          el.value = nextText;
+          el.textContent = nextText;
+        } else {
+          el.textContent = nextText;
+        }
+        notifyMutation(el, 'text');
+        return;
+      }
+
+      if (msg.operation === 'attr') {
+        if (msg.value === '' || msg.value == null || msg.value === false) el.removeAttribute(msg.attribute);
+        else el.setAttribute(msg.attribute, String(msg.value));
+        notifyMutation(el, 'attr:' + msg.attribute);
+        return;
+      }
+
+      if (msg.operation === 'delete') {
+        const parentEl = el.parentElement;
+        el.remove();
+        selectedId = null;
+        post('NCE_DOCUMENT', { html: cleanCloneHtml(), key: 'delete' });
+        post('NCE_DESELECTED');
+        if (parentEl && parentEl.hasAttribute(ID_ATTR)) selectElement(parentEl);
+        return;
+      }
+
+      if (msg.operation === 'duplicate') {
+        const clone = el.cloneNode(true);
+        clone.querySelectorAll('[' + ID_ATTR + ']').forEach(node => node.removeAttribute(ID_ATTR));
+        clone.removeAttribute(ID_ATTR);
+        clone.removeAttribute('data-unscriptly-selected');
+        el.insertAdjacentElement('afterend', clone);
+        assignIds(clone);
+        selectElement(clone);
+        notifyMutation(clone, 'duplicate');
+      }
+    });
+
+    window.addEventListener('DOMContentLoaded', () => post('NCE_READY'));
+    post('NCE_READY');
+  }
+
+  function handlePreviewMessage(event) {
+    if (event.source !== els.previewFrame.contentWindow) return;
+    const msg = event.data || {};
+    if (msg.source !== 'unscriptly-html-studio' || msg.token !== state.renderToken) return;
+
+    if (msg.type === 'NCE_READY') {
+      els.loadingOverlay.classList.add('hidden');
+      sendPreview({ type: 'NCE_SET_MODE', mode: state.mode });
+      return;
+    }
+
+    if (msg.type === 'NCE_SELECTED') {
+      state.selected = msg.element || null;
+      renderInspector(state.selected);
+      return;
+    }
+
+    if (msg.type === 'NCE_DESELECTED') {
+      state.selected = null;
+      clearInspector();
+      return;
+    }
+
+    if (msg.type === 'NCE_DOCUMENT') {
+      const page = activePage();
+      if (!page || typeof msg.html !== 'string') return;
+      commitPageHtml(page, msg.html, msg.key || 'visual-change', { rerender: false });
+      return;
+    }
+
+    if (msg.type === 'NCE_NAVIGATE') {
+      navigateWorkspaceLink(msg.href || '');
+    }
+  }
+
+  function sendPreview(message) {
+    if (!els.previewFrame.contentWindow || !state.renderToken) return;
+    els.previewFrame.contentWindow.postMessage(Object.assign({
+      source: 'unscriptly-html-studio',
+      token: state.renderToken
+    }, message), '*');
+  }
+
+  function navigateWorkspaceLink(href) {
+    const raw = String(href || '').trim();
+    if (!raw) return;
+    if (raw.startsWith('#')) {
+      sendPreview({ type: 'NCE_SCROLL_TO', hash: raw });
+      return;
+    }
+    const withoutHash = raw.split('#')[0].split('?')[0];
+    let decoded = withoutHash;
+    try { decoded = decodeURIComponent(withoutHash); } catch (_) {}
+    const basename = decoded.split('/').filter(Boolean).pop() || decoded;
+    const page = state.pages.find(p => p.name.toLowerCase() === basename.toLowerCase()) ||
+                 state.pages.find(p => p.name.toLowerCase() === decoded.toLowerCase());
+    if (page) {
+      setActivePage(page.id);
+      toast(`Opened ${page.name}`);
+    } else {
+      toast(`“${basename || raw}” is not loaded in this workspace.`, 'error');
+    }
+  }
+
+  function commitPageHtml(page, html, key, options = {}) {
+    if (!page || page.html === html) return;
+    page.html = html;
+    pushHistory(page, html, key);
+    page.analysis = analyzeHtml(html);
+    renderAnalysis(page.analysis);
+    renderPageList();
+    updateHistoryButtons();
+
+    if (els.codeDrawer.classList.contains('open') && !state.codeDirty) {
+      els.codeEditor.value = page.html;
+      setCodeStatus(false);
+    }
+
+    if (options.rerender !== false) {
+      state.selected = null;
+      clearInspector();
+      renderPreview();
+    }
+  }
+
+  function pushHistory(page, html, key) {
+    const now = Date.now();
+    page.history = page.history.slice(0, page.historyIndex + 1);
+    const last = page.history[page.history.length - 1];
+    const groupable = last && last.key === key && (now - last.at) < 700 && key !== 'text' && key !== 'delete' && key !== 'duplicate';
+    if (groupable) {
+      last.html = html;
+      last.at = now;
+      page.historyIndex = page.history.length - 1;
+    } else {
+      page.history.push({ html, key, at: now });
+      if (page.history.length > 80) page.history.shift();
+      page.historyIndex = page.history.length - 1;
+    }
+  }
+
+  function undo() {
+    const page = activePage();
+    if (!page || page.historyIndex <= 0) return;
+    page.historyIndex--;
+    restoreHistoryEntry(page);
+  }
+
+  function redo() {
+    const page = activePage();
+    if (!page || page.historyIndex >= page.history.length - 1) return;
+    page.historyIndex++;
+    restoreHistoryEntry(page);
+  }
+
+  function restoreHistoryEntry(page) {
+    const entry = page.history[page.historyIndex];
+    if (!entry) return;
+    page.html = entry.html;
+    page.analysis = analyzeHtml(page.html);
+    state.selected = null;
+    state.codeDirty = false;
+    renderPageList();
+    renderAnalysis(page.analysis);
+    updateHistoryButtons();
+    if (els.codeDrawer.classList.contains('open')) {
+      els.codeEditor.value = page.html;
+      setCodeStatus(false);
+    }
+    renderPreview();
+  }
+
+  function updateHistoryButtons() {
+    const page = activePage();
+    els.undoBtn.disabled = !page || page.historyIndex <= 0;
+    els.redoBtn.disabled = !page || page.historyIndex >= page.history.length - 1;
+  }
+
+  function renderInspector(info) {
+    if (!info) return clearInspector();
+    els.inspectorEmpty.classList.add('hidden');
+    els.inspectorContent.classList.remove('hidden');
+    const descriptor = info.id ? `${info.tag}#${info.id}` : info.classes?.length ? `${info.tag}.${info.classes.slice(0, 1).join('.')}` : info.tag;
+    els.selectedElementTitle.textContent = descriptor || 'Selected element';
+    els.selectionPath.textContent = info.path || info.tag || '';
+
+    els.textContentInput.value = info.text || '';
+    els.hrefInput.value = info.attrs?.href || '';
+    els.newTabInput.checked = info.attrs?.target === '_blank';
+    els.srcInput.value = info.attrs?.src || '';
+    els.altInput.value = info.attrs?.alt || '';
+    els.linkControls.classList.toggle('hidden', info.tag !== 'a');
+    els.imageControls.classList.toggle('hidden', info.tag !== 'img');
+
+    const s = info.styles || {};
+    els.fontSizeInput.value = numberFromPx(s.fontSize);
+    els.fontWeightInput.value = normalizeWeight(s.fontWeight);
+    els.textColorInput.value = colorToHexOrCss(s.color);
+    els.textColorPicker.value = colorToHex(s.color, '#111111');
+    els.backgroundColorInput.value = colorToHexOrCss(s.backgroundColor);
+    els.backgroundColorPicker.value = colorToHex(s.backgroundColor, '#ffffff');
+    els.borderRadiusInput.value = numberFromPx(s.borderRadius);
+    els.opacityInput.value = s.opacity || '1';
+    els.borderWidthInput.value = numberFromPx(s.borderWidth);
+    els.borderStyleInput.value = ['none','solid','dashed','dotted'].includes(s.borderStyle) ? s.borderStyle : 'solid';
+    els.borderColorInput.value = colorToHex(s.borderColor, '#111111');
+    els.widthInput.value = s.width || '';
+    els.heightInput.value = s.height || '';
+    els.paddingInput.value = s.padding || '';
+    els.marginInput.value = s.margin || '';
+    els.displayInput.value = ['block','inline','inline-block','flex','grid','none'].includes(s.display) ? s.display : '';
+
+    qsa('#textAlignInput button').forEach(btn => btn.classList.toggle('active', btn.dataset.align === s.textAlign));
+  }
+
+  function clearInspector() {
+    state.selected = null;
+    els.inspectorEmpty.classList.remove('hidden');
+    els.inspectorContent.classList.add('hidden');
+    els.selectedElementTitle.textContent = 'Nothing selected';
+    els.selectionPath.textContent = '';
+  }
+
+  function numberFromPx(value) {
+    const n = parseFloat(String(value || ''));
+    return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : '';
+  }
+
+  function normalizeWeight(value) {
+    const map = { normal: '400', bold: '700' };
+    const normalized = map[value] || String(value || '');
+    return ['300','400','500','600','700','800','900'].includes(normalized) ? normalized : '';
+  }
+
+  function colorToHex(value, fallback) {
+    const v = String(value || '').trim().toLowerCase();
+    if (/^#[0-9a-f]{6}$/i.test(v)) return v;
+    if (/^#[0-9a-f]{3}$/i.test(v)) return '#' + v.slice(1).split('').map(c => c + c).join('');
+    const match = v.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,/\s]+([\d.]+))?\s*\)$/i);
+    if (!match || (match[4] != null && Number(match[4]) === 0)) return fallback;
+    return '#' + [1,2,3].map(i => Math.max(0, Math.min(255, Math.round(Number(match[i])))).toString(16).padStart(2, '0')).join('');
+  }
+
+  function colorToHexOrCss(value) {
+    const v = String(value || '').trim();
+    if (/rgba?\([^)]*,?\s*0\s*\)$/i.test(v) || v === 'transparent') return 'transparent';
+    return colorToHex(v, v || 'transparent');
+  }
+
+  function applyToSelected(operation, data = {}) {
+    if (!state.selected?.editorId) {
+      toast('Select an element in the preview first.', 'error');
+      return;
+    }
+    sendPreview(Object.assign({
+      type: 'NCE_APPLY',
+      operation,
+      editorId: state.selected.editorId
+    }, data));
+  }
+
+  function setStyle(property, value) {
+    applyToSelected('style', { property, value });
+  }
+
+  function setMode(mode) {
+    state.mode = mode === 'interact' ? 'interact' : 'select';
+    els.selectModeBtn.classList.toggle('active', state.mode === 'select');
+    els.interactModeBtn.classList.toggle('active', state.mode === 'interact');
+    sendPreview({ type: 'NCE_SET_MODE', mode: state.mode });
+    if (state.mode === 'interact') {
+      clearInspector();
+      toast('Interact mode: links, buttons, and controls behave normally.');
+    }
+  }
+
+  function setDevice(device) {
+    state.device = device;
+    els.previewShell.dataset.device = device;
+    qsa('.device-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.device === device));
+    const labels = { desktop: 'Responsive desktop', tablet: 'Tablet · 768 × 1024', mobile: 'Mobile · 390 × 844' };
+    els.viewportLabel.textContent = labels[device] || labels.desktop;
+  }
+
+  async function importFiles(fileList) {
+    const files = Array.from(fileList || []).filter(file => /\.html?$/i.test(file.name) || file.type === 'text/html');
+    if (!files.length) {
+      toast('Choose one or more .html files.', 'error');
+      return;
+    }
+    els.loadingOverlay.classList.remove('hidden');
+    try {
+      const results = await Promise.all(files.map(async file => ({ name: file.name, html: await file.text() })));
+      let firstId = null;
+      results.forEach((item, index) => {
+        const page = createPage(item.name, item.html, { activate: false });
+        if (index === 0) firstId = page.id;
+      });
+      if (firstId) setActivePage(firstId);
+      toast(`${results.length} page${results.length === 1 ? '' : 's'} imported.`);
+    } catch (error) {
+      console.error(error);
+      toast('One or more files could not be read.', 'error');
+    } finally {
+      els.loadingOverlay.classList.add('hidden');
+      els.fileInput.value = '';
+    }
+  }
+
+  function openPasteModal() {
+    els.pastePageName.value = state.pages.length ? uniquePageName('page.html') : 'index.html';
+    els.pasteHtmlInput.value = '';
+    openModal('pasteModal');
+    setTimeout(() => els.pasteHtmlInput.focus(), 50);
+  }
+
+  function importPastedHtml() {
+    const html = els.pasteHtmlInput.value;
+    if (!html.trim()) {
+      toast('Paste some HTML first.', 'error');
+      return;
+    }
+    createPage(els.pastePageName.value || 'index.html', html);
+    closeModal('pasteModal');
+    toast('HTML imported.');
+  }
+
+  function addBlankPage() {
+    const defaultName = state.pages.length ? `page-${state.pages.length + 1}.html` : 'index.html';
+    const requested = window.prompt('Page filename', defaultName);
+    if (requested === null) return;
+    createPage(requested || defaultName, BLANK_PAGE);
+  }
+
+  function openCodeDrawer() {
+    const page = activePage();
+    if (!page) {
+      toast('Import a page before opening the code editor.', 'error');
+      return;
+    }
+    els.codeEditor.value = page.html;
+    els.codeDrawerTitle.textContent = page.name;
+    setCodeStatus(false);
+    els.codeDrawer.classList.add('open');
+    els.codeDrawer.setAttribute('aria-hidden', 'false');
+    els.drawerBackdrop.classList.remove('hidden');
+  }
+
+  function closeCodeDrawer() {
+    if (state.codeDirty && !window.confirm('Close the code editor and discard unapplied source changes?')) return;
+    els.codeDrawer.classList.remove('open');
+    els.codeDrawer.setAttribute('aria-hidden', 'true');
+    els.drawerBackdrop.classList.add('hidden');
+    setCodeStatus(false);
+  }
+
+  function setCodeStatus(dirty) {
+    state.codeDirty = !!dirty;
+    els.codeStatus.textContent = dirty ? 'Unapplied changes' : 'In sync';
+    els.codeStatus.classList.toggle('dirty', dirty);
+  }
+
+  function applyCodeChanges() {
+    const page = activePage();
+    if (!page) return;
+    const html = els.codeEditor.value;
+    commitPageHtml(page, html, 'source-edit', { rerender: true });
+    setCodeStatus(false);
+    toast('Source changes applied.');
+  }
+
+  function formatSourceConservatively(html) {
+    const rawBlocks = [];
+    let safe = String(html || '').replace(/<(script|style|pre|textarea)\b[^>]*>[\s\S]*?<\/\1>/gi, block => {
+      const key = `___RAW_BLOCK_${rawBlocks.length}___`;
+      rawBlocks.push(block);
+      return key;
+    });
+    safe = safe.replace(/>\s*</g, '>\n<');
+    const lines = safe.split('\n');
+    let depth = 0;
+    const voidTags = /^(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b/i;
+    const formatted = lines.map(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return '';
+      if (/^<\//.test(trimmed)) depth = Math.max(0, depth - 1);
+      const output = '  '.repeat(depth) + trimmed;
+      if (/^<[^!/][^>]*>/.test(trimmed) && !/^<\//.test(trimmed) && !/\/>$/.test(trimmed)) {
+        const tag = trimmed.match(/^<\s*([\w-]+)/)?.[1] || '';
+        const closesSameLine = new RegExp(`<\\/${tag}\\s*>$`, 'i').test(trimmed);
+        if (tag && !voidTags.test(tag) && !closesSameLine) depth++;
+      }
+      return output;
+    }).filter(Boolean).join('\n');
+    return formatted.replace(/___RAW_BLOCK_(\d+)___/g, (_, index) => rawBlocks[Number(index)] || '');
+  }
+
+  function copyCurrentHtml() {
+    const page = activePage();
+    if (!page) {
+      toast('There is no active page to copy.', 'error');
+      return;
+    }
+    copyText(page.html).then(() => toast('HTML copied to clipboard.')).catch(() => toast('Could not copy automatically.', 'error'));
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    if (!ok) throw new Error('copy failed');
+  }
+
+  function downloadCurrentPage() {
+    const page = activePage();
+    if (!page) {
+      toast('There is no active page to export.', 'error');
+      return;
+    }
+    downloadBlob(new Blob([page.html], { type: 'text/html;charset=utf-8' }), page.name);
+    closeModal('exportModal');
+    toast(`${page.name} exported.`);
+  }
+
+  function exportAllPages() {
+    if (!state.pages.length) {
+      toast('There are no pages to export.', 'error');
+      return;
+    }
+    if (!(window.google && google.script && google.script.run)) {
+      toast('ZIP export is available when the app is running in Google Apps Script.', 'error');
+      return;
+    }
+    els.exportAllBtn.disabled = true;
+    const original = els.exportAllBtn.innerHTML;
+    els.exportAllBtn.innerHTML = '<span class="export-icon">…</span><span><strong>Building ZIP</strong><small>Packaging your HTML pages.</small></span>';
+    google.script.run
+      .withSuccessHandler(result => {
+        els.exportAllBtn.disabled = false;
+        els.exportAllBtn.innerHTML = original;
+        const bytes = Uint8Array.from(atob(result.base64), c => c.charCodeAt(0));
+        downloadBlob(new Blob([bytes], { type: result.mimeType || 'application/zip' }), result.name || 'html-pages.zip');
+        closeModal('exportModal');
+        toast('All pages exported as ZIP.');
+      })
+      .withFailureHandler(error => {
+        els.exportAllBtn.disabled = false;
+        els.exportAllBtn.innerHTML = original;
+        console.error(error);
+        toast(error?.message || 'ZIP export failed.', 'error');
+      })
+      .exportPagesZip(state.pages.map(page => ({ name: page.name, html: page.html })));
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      link.remove();
+    }, 1200);
+  }
+
+  function openModal(id) {
+    $(id)?.classList.remove('hidden');
+  }
+
+  function closeModal(id) {
+    $(id)?.classList.add('hidden');
+  }
+
+  function toast(message, type = 'success') {
+    const node = document.createElement('div');
+    node.className = 'toast' + (type === 'error' ? ' error' : '');
+    node.textContent = message;
+    els.toastRegion.appendChild(node);
+    setTimeout(() => {
+      node.style.opacity = '0';
+      node.style.transform = 'translateY(5px)';
+      setTimeout(() => node.remove(), 180);
+    }, 2800);
+  }
+
+  function toggleMobilePanel(panel) {
+    const other = panel === els.leftPanel ? els.inspectorPanel : els.leftPanel;
+    other.classList.remove('open');
+    panel.classList.toggle('open');
+    els.drawerBackdrop.classList.toggle('hidden', !panel.classList.contains('open'));
+  }
+
+  function closeMobilePanels() {
+    els.leftPanel.classList.remove('open');
+    els.inspectorPanel.classList.remove('open');
+    if (!els.codeDrawer.classList.contains('open')) els.drawerBackdrop.classList.add('hidden');
+  }
+
+  function bindInspectorControls() {
+    els.textContentInput.addEventListener('change', () => applyToSelected('text', { value: els.textContentInput.value }));
+    els.hrefInput.addEventListener('change', () => applyToSelected('attr', { attribute: 'href', value: els.hrefInput.value }));
+    els.newTabInput.addEventListener('change', () => applyToSelected('attr', { attribute: 'target', value: els.newTabInput.checked ? '_blank' : '' }));
+    els.srcInput.addEventListener('change', () => applyToSelected('attr', { attribute: 'src', value: els.srcInput.value }));
+    els.altInput.addEventListener('change', () => applyToSelected('attr', { attribute: 'alt', value: els.altInput.value }));
+    els.fontSizeInput.addEventListener('change', () => setStyle('font-size', els.fontSizeInput.value === '' ? '' : `${els.fontSizeInput.value}px`));
+    els.fontWeightInput.addEventListener('change', () => setStyle('font-weight', els.fontWeightInput.value));
+    els.textColorInput.addEventListener('change', () => {
+      const value = els.textColorInput.value.trim();
+      setStyle('color', value);
+      els.textColorPicker.value = colorToHex(value, els.textColorPicker.value);
+    });
+    els.textColorPicker.addEventListener('input', () => {
+      els.textColorInput.value = els.textColorPicker.value;
+      setStyle('color', els.textColorPicker.value);
+    });
+    els.backgroundColorInput.addEventListener('change', () => {
+      const value = els.backgroundColorInput.value.trim();
+      setStyle('background-color', value);
+      els.backgroundColorPicker.value = colorToHex(value, els.backgroundColorPicker.value);
+    });
+    els.backgroundColorPicker.addEventListener('input', () => {
+      els.backgroundColorInput.value = els.backgroundColorPicker.value;
+      setStyle('background-color', els.backgroundColorPicker.value);
+    });
+    els.borderRadiusInput.addEventListener('change', () => setStyle('border-radius', els.borderRadiusInput.value === '' ? '' : `${els.borderRadiusInput.value}px`));
+    els.opacityInput.addEventListener('change', () => setStyle('opacity', els.opacityInput.value));
+    els.borderWidthInput.addEventListener('change', () => setStyle('border-width', els.borderWidthInput.value === '' ? '' : `${els.borderWidthInput.value}px`));
+    els.borderStyleInput.addEventListener('change', () => setStyle('border-style', els.borderStyleInput.value));
+    els.borderColorInput.addEventListener('input', () => setStyle('border-color', els.borderColorInput.value));
+    els.widthInput.addEventListener('change', () => setStyle('width', els.widthInput.value.trim()));
+    els.heightInput.addEventListener('change', () => setStyle('height', els.heightInput.value.trim()));
+    els.paddingInput.addEventListener('change', () => setStyle('padding', els.paddingInput.value.trim()));
+    els.marginInput.addEventListener('change', () => setStyle('margin', els.marginInput.value.trim()));
+    els.displayInput.addEventListener('change', () => setStyle('display', els.displayInput.value));
+    qsa('#textAlignInput button').forEach(btn => btn.addEventListener('click', () => {
+      qsa('#textAlignInput button').forEach(b => b.classList.toggle('active', b === btn));
+      setStyle('text-align', btn.dataset.align);
+    }));
+    els.deleteElementBtn.addEventListener('click', () => {
+      if (state.selected && window.confirm(`Delete the selected <${state.selected.tag}> element?`)) applyToSelected('delete');
+    });
+    els.duplicateElementBtn.addEventListener('click', () => applyToSelected('duplicate'));
+
+    qsa('.section-toggle').forEach(button => {
+      button.addEventListener('click', () => {
+        const body = $(button.dataset.toggle);
+        if (!body) return;
+        const collapsed = body.classList.toggle('collapsed');
+        button.classList.toggle('collapsed', collapsed);
+      });
+    });
+  }
+
+  function bindEvents() {
+    window.addEventListener('message', handlePreviewMessage);
+    document.addEventListener('click', event => {
+      if (state.pagePopover && !state.pagePopover.contains(event.target)) closePagePopover();
+    });
+
+    els.fileInput.addEventListener('change', event => importFiles(event.target.files));
+    els.emptyUploadBtn.addEventListener('click', () => els.fileInput.click());
+    els.pasteBtn.addEventListener('click', openPasteModal);
+    els.emptyPasteBtn.addEventListener('click', openPasteModal);
+    els.addPageBtn.addEventListener('click', addBlankPage);
+    els.importPasteBtn.addEventListener('click', importPastedHtml);
+
+    els.selectModeBtn.addEventListener('click', () => setMode('select'));
+    els.interactModeBtn.addEventListener('click', () => setMode('interact'));
+    qsa('.device-btn').forEach(btn => btn.addEventListener('click', () => setDevice(btn.dataset.device)));
+    els.refreshBtn.addEventListener('click', renderPreview);
+    els.undoBtn.addEventListener('click', undo);
+    els.redoBtn.addEventListener('click', redo);
+
+    els.codeBtn.addEventListener('click', openCodeDrawer);
+    els.closeCodeBtn.addEventListener('click', closeCodeDrawer);
+    els.applyCodeBtn.addEventListener('click', applyCodeChanges);
+    els.codeEditor.addEventListener('input', () => setCodeStatus(true));
+    els.formatCodeBtn.addEventListener('click', () => {
+      els.codeEditor.value = formatSourceConservatively(els.codeEditor.value);
+      setCodeStatus(true);
+      toast('Source formatted. Review, then apply changes.');
+    });
+
+    els.copyBtn.addEventListener('click', copyCurrentHtml);
+    els.exportBtn.addEventListener('click', () => activePage() ? openModal('exportModal') : toast('Import a page before exporting.', 'error'));
+    els.exportCurrentBtn.addEventListener('click', downloadCurrentPage);
+    els.exportAllBtn.addEventListener('click', exportAllPages);
+    els.exportCopyBtn.addEventListener('click', () => {
+      copyCurrentHtml();
+      closeModal('exportModal');
+    });
+
+    qsa('.modal-close').forEach(button => button.addEventListener('click', () => closeModal(button.dataset.closeModal)));
+    qsa('.modal-backdrop').forEach(backdrop => backdrop.addEventListener('click', event => {
+      if (event.target === backdrop) closeModal(backdrop.id);
+    }));
+
+    els.pagesToggleBtn.addEventListener('click', () => toggleMobilePanel(els.leftPanel));
+    els.inspectorToggleBtn.addEventListener('click', () => toggleMobilePanel(els.inspectorPanel));
+    els.inspectorCloseBtn.addEventListener('click', closeMobilePanels);
+    els.drawerBackdrop.addEventListener('click', () => {
+      if (els.codeDrawer.classList.contains('open')) closeCodeDrawer();
+      else closeMobilePanels();
+    });
+
+    window.addEventListener('keydown', event => {
+      const editingField = ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+      if (!editingField && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        event.shiftKey ? redo() : undo();
+      }
+      if (!editingField && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        redo();
+      }
+      if (event.key === 'Escape') {
+        if (!els.pasteModal.classList.contains('hidden')) closeModal('pasteModal');
+        else if (!els.exportModal.classList.contains('hidden')) closeModal('exportModal');
+        else if (els.codeDrawer.classList.contains('open')) closeCodeDrawer();
+        else closeMobilePanels();
+      }
+    });
+
+    bindInspectorControls();
+  }
+
+  function injectDynamicStyles() {
+    const style = document.createElement('style');
+    style.textContent = `
+      .page-popover { width: 150px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: #fff; box-shadow: 0 14px 40px rgba(0,0,0,.15); }
+      .page-popover button { width: 100%; min-height: 31px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; text-align: left; cursor: pointer; font-size: 10px; }
+      .page-popover button:hover { background: #f2f2ef; }
+      .page-popover .danger-text { color: var(--danger); }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function init() {
+    injectDynamicStyles();
+    bindEvents();
+    renderPageList();
+    renderAnalysis(null);
+    setMode('select');
+    setDevice('desktop');
+  }
+
+  init();
+})();
+</script>

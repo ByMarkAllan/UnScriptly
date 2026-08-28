@@ -1,0 +1,420 @@
+<script>
+(function () {
+  'use strict';
+  var plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  var root = document.documentElement;
+  var wireframe = false;
+  var bridgeReady = false;
+  var bridgeEnhanced = true;
+  var showNotes = true;
+  var pickMode = false;
+  var editingId = '';
+  var draftAnchor = null;
+  var review = { schemaVersion: 1, notes: {} };
+  var positionMap = {};
+  var LOCAL_KEY = 'unscriptly.review.draft.v1';
+  var appConfig = window.__HTML_STUDIO_CONFIG || {};
+  var previousPageName = '';
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector, base) { return Array.prototype.slice.call((base || document).querySelectorAll(selector)); }
+  function setStatus(value) { root.setAttribute('data-html-studio-review', value); }
+  function currentPage() {
+    var label = $('currentPageLabel');
+    var value = label ? String(label.textContent || '').trim() : '';
+    return value && value !== 'No page loaded' ? value : '';
+  }
+  function clone(value) { return JSON.parse(JSON.stringify(value)); }
+  function uid() { return 'note_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
+  function now() { return new Date().toISOString(); }
+  function pageNotes(pageName) {
+    pageName = pageName || currentPage();
+    if (!pageName) return [];
+    if (!Array.isArray(review.notes[pageName])) review.notes[pageName] = [];
+    return review.notes[pageName];
+  }
+  function noteCount() {
+    var total = 0;
+    Object.keys(review.notes || {}).forEach(function (key) { total += Array.isArray(review.notes[key]) ? review.notes[key].length : 0; });
+    return total;
+  }
+  function saveLocal() {
+    try { localStorage.setItem(LOCAL_KEY, JSON.stringify(review)); } catch (_) {}
+  }
+  function loadLocal() {
+    try {
+      var raw = localStorage.getItem(LOCAL_KEY);
+      if (!raw) return;
+      var parsed = JSON.parse(raw);
+      if (parsed && parsed.notes && typeof parsed.notes === 'object') review = { schemaVersion: 1, notes: parsed.notes };
+    } catch (_) {}
+  }
+  function markDirty() {
+    saveLocal();
+    if (window.HTMLStudioProjects && HTMLStudioProjects.markDirty) HTMLStudioProjects.markDirty();
+    document.dispatchEvent(new CustomEvent('htmlstudio:review-notes-changed', { detail: exportProjectReview() }));
+  }
+  function post(type, payload) {
+    var frame = $('previewFrame');
+    if (!frame || !frame.contentWindow) return false;
+    frame.contentWindow.postMessage(Object.assign({ source: 'unscriptly-html-studio', type: type }, payload || {}), '*');
+    return true;
+  }
+  function syncWireframe() {
+    var frame = $('previewFrame');
+    root.classList.toggle('studio-wireframe-active', wireframe);
+    if ($('wireframeToggleBtn')) {
+      $('wireframeToggleBtn').classList.toggle('active', wireframe);
+      $('wireframeToggleBtn').setAttribute('aria-pressed', wireframe ? 'true' : 'false');
+      $('wireframeToggleBtn').textContent = wireframe ? 'Hi-Fi' : 'Wireframe';
+    }
+    if (frame) frame.classList.toggle('review-wireframe-fallback', wireframe && !bridgeEnhanced);
+    if (bridgeReady) post('NCE_REVIEW_WIREFRAME_SET', { enabled: wireframe });
+  }
+  function setWireframe(value) {
+    wireframe = !!value;
+    syncWireframe();
+  }
+  function toggleWireframe() {
+    if (!plus.hasPage()) { plus.toast('Import or open a page before switching to Wireframe.', 'error'); return; }
+    setWireframe(!wireframe);
+  }
+
+  function structuralPathInDoc(el, body) {
+    if (!el || !body) return '';
+    if (el === body) return 'body';
+    var parts = [], cursor = el;
+    while (cursor && cursor !== body) {
+      var parent = cursor.parentElement;
+      if (!parent) return '';
+      var index = Array.prototype.indexOf.call(parent.children, cursor);
+      if (index < 0) return '';
+      parts.unshift(index);
+      cursor = parent;
+    }
+    return cursor === body ? parts.join('.') : '';
+  }
+  function reconcileNotePaths() {
+    var notes = pageNotes();
+    if (!notes.length || !plus.readSource) return;
+    var source = String(plus.readSource() || '');
+    if (!source) return;
+    var doc;
+    try { doc = new DOMParser().parseFromString(source, 'text/html'); } catch (_) { return; }
+    if (!doc || !doc.body) return;
+    notes.forEach(function (note) {
+      var target = null;
+      if (note.domId) target = doc.getElementById(note.domId);
+      if (!target && note.sourceSelector) {
+        try { target = doc.querySelector(note.sourceSelector); } catch (_) {}
+      }
+      if (!target) return;
+      var next = structuralPathInDoc(target, doc.body);
+      if (next) note.path = next;
+    });
+  }
+  function notePathItems() {
+    return pageNotes().filter(function (note) { return note && note.path; }).map(function (note) { return { id: note.id, path: note.path }; });
+  }
+  function syncNotePaths() {
+    positionMap = {};
+    if (!bridgeReady || !plus.hasPage()) { renderPins(); return; }
+    reconcileNotePaths();
+    post('NCE_REVIEW_NOTE_PATHS', { items: notePathItems() });
+  }
+  function renderPins() {
+    var overlay = $('reviewNotesOverlay');
+    if (!overlay) return;
+    overlay.innerHTML = '';
+    overlay.classList.toggle('hidden', !showNotes || !plus.hasPage());
+    if (!showNotes || !plus.hasPage()) return;
+    var notes = pageNotes();
+    var width = overlay.clientWidth || ($('previewFrame') && $('previewFrame').clientWidth) || 0;
+    var height = overlay.clientHeight || ($('previewFrame') && $('previewFrame').clientHeight) || 0;
+    notes.forEach(function (note, index) {
+      var pos = positionMap[note.id];
+      if (!pos || !pos.found) return;
+      var pin = document.createElement('button');
+      pin.type = 'button';
+      pin.className = 'review-note-pin' + (note.status === 'resolved' ? ' resolved' : '');
+      pin.textContent = String(index + 1);
+      pin.setAttribute('aria-label', (note.status === 'resolved' ? 'Resolved note: ' : 'Editor note: ') + (note.title || 'Note'));
+      pin.title = note.title || 'Editor note';
+      var x = Number(pos.x || 0) + Math.max(0, Number(pos.width || 0)) - 4;
+      var y = Number(pos.y || 0) + 4;
+      x = Math.max(14, Math.min(width ? width - 14 : x, x));
+      y = Math.max(14, Math.min(height ? height - 14 : y, y));
+      pin.style.left = x + 'px';
+      pin.style.top = y + 'px';
+      pin.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); openEditor(note); });
+      overlay.appendChild(pin);
+    });
+  }
+
+  function noteStatusLabel(note) { return note.status === 'resolved' ? 'Resolved' : 'Open'; }
+  function renderNotes() {
+    var list = $('notesList');
+    var empty = $('notesEmptyState');
+    var count = $('notesCountBadge');
+    if (count) count.textContent = String(noteCount());
+    if (!list) return;
+    list.innerHTML = '';
+    var filter = $('notesFilterInput') ? $('notesFilterInput').value : 'all';
+    var notes = pageNotes().filter(function (note) { return filter === 'all' || note.status === filter; });
+    if (!notes.length) {
+      if (empty) {
+        empty.textContent = currentPage() ? (filter === 'all' ? 'No editor notes on this page yet.' : 'No ' + filter + ' notes on this page.') : 'Import or open a page to add editor notes.';
+        empty.classList.remove('hidden');
+      }
+      return;
+    }
+    if (empty) empty.classList.add('hidden');
+    notes.forEach(function (note, index) {
+      var card = document.createElement('article');
+      card.className = 'review-note-card' + (note.status === 'resolved' ? ' resolved' : '');
+      var head = document.createElement('div');
+      head.className = 'review-note-card-head';
+      var number = document.createElement('span');
+      number.className = 'review-note-number';
+      number.textContent = String(pageNotes().indexOf(note) + 1);
+      var copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'review-note-card-copy';
+      copy.innerHTML = '<strong></strong><span></span>';
+      copy.querySelector('strong').textContent = note.title || 'Editor note';
+      copy.querySelector('span').textContent = note.body || 'No description';
+      copy.addEventListener('click', function () {
+        post('NCE_REVIEW_REVEAL_PATH', { path: note.path || '' });
+        openEditor(note);
+      });
+      var status = document.createElement('span');
+      status.className = 'review-note-status';
+      status.textContent = noteStatusLabel(note);
+      head.appendChild(number); head.appendChild(copy); head.appendChild(status);
+      card.appendChild(head);
+      var meta = document.createElement('div');
+      meta.className = 'review-note-meta';
+      meta.textContent = note.label ? 'Attached to ' + note.label : 'Element note';
+      card.appendChild(meta);
+      list.appendChild(card);
+    });
+  }
+
+  function enterPickMode() {
+    if (!plus.hasPage()) { plus.toast('Import or open a page before adding a note.', 'error'); return; }
+    pickMode = true;
+    root.classList.add('studio-note-pick-mode');
+    if ($('addNoteBtn')) $('addNoteBtn').textContent = 'Click an element…';
+    post('NCE_REVIEW_NOTE_PICK_MODE', { enabled: true });
+    plus.toast('Click an element in the canvas to attach the note. Press Esc to cancel.');
+  }
+  function cancelPickMode() {
+    if (!pickMode) return;
+    pickMode = false;
+    root.classList.remove('studio-note-pick-mode');
+    if ($('addNoteBtn')) $('addNoteBtn').textContent = '+ Add note';
+    post('NCE_REVIEW_NOTE_PICK_MODE', { enabled: false });
+  }
+  function addNote() {
+    var path = window.HTMLStudioLayers && HTMLStudioLayers.getActivePath ? HTMLStudioLayers.getActivePath() : '';
+    var selection = plus.getSelection ? plus.getSelection() : null;
+    if (path && selection) {
+      draftAnchor = { path: path, label: String(selection.text || selection.tag || 'Selected element').replace(/\s+/g, ' ').trim().slice(0, 80), domId: selection.id || '', sourceSelector: selection.path || '', tag: selection.tag || '', classes: selection.classes || [] };
+      openEditor(null, draftAnchor);
+      return;
+    }
+    enterPickMode();
+  }
+
+  function openEditor(note, anchor) {
+    cancelPickMode();
+    editingId = note && note.id ? note.id : '';
+    draftAnchor = anchor || (note ? { path: note.path, label: note.label } : draftAnchor);
+    if ($('noteEditorTitle')) $('noteEditorTitle').textContent = note ? 'Edit editor note' : 'Add editor note';
+    if ($('noteTitleInput')) $('noteTitleInput').value = note ? (note.title || '') : '';
+    if ($('noteBodyInput')) $('noteBodyInput').value = note ? (note.body || '') : '';
+    if ($('noteStatusInput')) $('noteStatusInput').value = note && note.status === 'resolved' ? 'resolved' : 'open';
+    if ($('noteAnchorLabel')) $('noteAnchorLabel').textContent = (draftAnchor && draftAnchor.label) ? draftAnchor.label : 'Selected element';
+    if ($('deleteNoteBtn')) $('deleteNoteBtn').classList.toggle('hidden', !note);
+    if ($('noteEditorModal')) $('noteEditorModal').classList.remove('hidden');
+    window.setTimeout(function () { if ($('noteTitleInput')) $('noteTitleInput').focus(); }, 0);
+  }
+  function closeEditor() {
+    if ($('noteEditorModal')) $('noteEditorModal').classList.add('hidden');
+    editingId = '';
+    draftAnchor = null;
+  }
+  function findEditingNote() {
+    if (!editingId) return null;
+    var notes = pageNotes();
+    for (var i = 0; i < notes.length; i++) if (notes[i].id === editingId) return notes[i];
+    return null;
+  }
+  function saveNote() {
+    var page = currentPage();
+    if (!page || !draftAnchor || !draftAnchor.path) { plus.toast('Choose an element for this note first.', 'error'); return; }
+    var notes = pageNotes(page);
+    var existing = findEditingNote();
+    var timestamp = now();
+    var value = existing || { id: uid(), createdAt: timestamp };
+    value.page = page;
+    value.path = draftAnchor.path;
+    value.label = draftAnchor.label || 'Element';
+    value.domId = draftAnchor.domId || value.domId || '';
+    value.sourceSelector = draftAnchor.sourceSelector || value.sourceSelector || '';
+    value.tag = draftAnchor.tag || value.tag || '';
+    value.classes = Array.isArray(draftAnchor.classes) ? draftAnchor.classes.slice(0, 6) : (value.classes || []);
+    value.title = String($('noteTitleInput') ? $('noteTitleInput').value : '').trim() || 'Editor note';
+    value.body = String($('noteBodyInput') ? $('noteBodyInput').value : '').trim();
+    value.status = $('noteStatusInput') && $('noteStatusInput').value === 'resolved' ? 'resolved' : 'open';
+    value.updatedAt = timestamp;
+    if (!existing) notes.push(value);
+    closeEditor();
+    markDirty();
+    renderNotes();
+    syncNotePaths();
+    plus.toast(existing ? 'Editor note updated.' : 'Editor note added.');
+  }
+  function deleteNote() {
+    var existing = findEditingNote();
+    if (!existing) return;
+    if (!window.confirm('Delete this editor note?')) return;
+    var notes = pageNotes();
+    var index = notes.indexOf(existing);
+    if (index >= 0) notes.splice(index, 1);
+    closeEditor();
+    markDirty();
+    renderNotes();
+    syncNotePaths();
+    plus.toast('Editor note deleted.');
+  }
+
+  function exportProjectReview() {
+    return { schemaVersion: 1, notes: clone(review.notes || {}) };
+  }
+  function importProjectReview(value) {
+    if (value && value.notes && typeof value.notes === 'object') review = { schemaVersion: 1, notes: clone(value.notes) };
+    else review = { schemaVersion: 1, notes: {} };
+    saveLocal();
+    renderNotes();
+    syncNotePaths();
+  }
+  function getNotesForPage(page) { return clone(pageNotes(page)); }
+
+  function bindMessages() {
+    window.addEventListener('message', function (event) {
+      var frame = $('previewFrame');
+      if (!frame || event.source !== frame.contentWindow) return;
+      var msg = event.data || {};
+      if (msg.source !== 'unscriptly-html-studio') return;
+      if (msg.type === 'NCE_REVIEW_BRIDGE_READY') {
+        bridgeReady = true;
+        bridgeEnhanced = msg.skeletonRuntime !== false;
+        root.setAttribute('data-html-studio-review-runtime', 'ready');
+        syncWireframe();
+        syncNotePaths();
+        return;
+      }
+      if (msg.type === 'NCE_REVIEW_WIREFRAME_STATE') {
+        bridgeEnhanced = msg.skeletonRuntime !== false && msg.enhanced !== false;
+        var preview = $('previewFrame');
+        if (preview) preview.classList.toggle('review-wireframe-fallback', wireframe && !bridgeEnhanced);
+        return;
+      }
+      if (msg.type === 'NCE_REVIEW_NOTE_ANCHOR') {
+        cancelPickMode();
+        draftAnchor = { path: String(msg.path || ''), label: String(msg.label || 'Element'), domId: String(msg.domId || ''), tag: String(msg.tag || ''), classes: Array.isArray(msg.classes) ? msg.classes.slice(0, 6) : [] };
+        openEditor(null, draftAnchor);
+        return;
+      }
+      if (msg.type === 'NCE_REVIEW_NOTE_POSITIONS') {
+        positionMap = {};
+        (msg.items || []).forEach(function (item) { if (item && item.id) positionMap[item.id] = item; });
+        renderPins();
+      }
+    });
+  }
+
+  function bindUi() {
+    if ($('wireframeToggleBtn')) $('wireframeToggleBtn').addEventListener('click', toggleWireframe);
+    if ($('addNoteBtn')) $('addNoteBtn').addEventListener('click', addNote);
+    if ($('showNotesInput')) $('showNotesInput').addEventListener('change', function () { showNotes = !!this.checked; syncNotePaths(); renderPins(); });
+    if ($('notesFilterInput')) $('notesFilterInput').addEventListener('change', renderNotes);
+    if ($('saveNoteBtn')) $('saveNoteBtn').addEventListener('click', saveNote);
+    if ($('deleteNoteBtn')) $('deleteNoteBtn').addEventListener('click', deleteNote);
+    if ($('cancelNoteBtn')) $('cancelNoteBtn').addEventListener('click', closeEditor);
+    if ($('noteEditorCloseBtn')) $('noteEditorCloseBtn').addEventListener('click', closeEditor);
+    if ($('noteEditorModal')) $('noteEditorModal').addEventListener('click', function (event) { if (event.target === this) closeEditor(); });
+
+    document.addEventListener('htmlstudio:plus-preview-ready', function () {
+      bridgeReady = false;
+      positionMap = {};
+      window.setTimeout(function () { syncWireframe(); syncNotePaths(); renderNotes(); }, 70);
+    });
+    document.addEventListener('htmlstudio:plus-selection', function () { /* Selection is consumed when Add note is clicked. */ });
+    document.addEventListener('click', function (event) {
+      var notesTab = event.target && event.target.closest ? event.target.closest('[data-library-view="notes"]') : null;
+      if (notesTab) { renderNotes(); syncNotePaths(); }
+    }, true);
+
+    var pageLabel = $('currentPageLabel');
+    previousPageName = currentPage();
+    if (pageLabel && window.MutationObserver) new MutationObserver(function () {
+      var nextPageName = currentPage();
+      if (previousPageName && nextPageName && previousPageName !== nextPageName) {
+        var existingNames = qsa('#pageList .page-item .page-name').map(function (node) { return String(node.textContent || '').trim(); });
+        var oldWasRemoved = existingNames.indexOf(previousPageName) < 0;
+        if (oldWasRemoved && Array.isArray(review.notes[previousPageName]) && !review.notes[nextPageName]) {
+          review.notes[nextPageName] = review.notes[previousPageName];
+          review.notes[nextPageName].forEach(function (note) { note.page = nextPageName; });
+          delete review.notes[previousPageName];
+          markDirty();
+        }
+      }
+      previousPageName = nextPageName;
+      positionMap = {};
+      renderNotes();
+      window.setTimeout(syncNotePaths, 80);
+    }).observe(pageLabel, { childList: true, subtree: true, characterData: true });
+
+    var frame = $('previewFrame');
+    if (frame) frame.addEventListener('load', function () { positionMap = {}; window.setTimeout(function () { syncWireframe(); syncNotePaths(); }, 80); });
+
+    window.addEventListener('resize', function () { if (bridgeReady) post('NCE_REVIEW_NOTE_REFRESH'); });
+    window.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      if (pickMode) { event.preventDefault(); cancelPickMode(); }
+      else if ($('noteEditorModal') && !$('noteEditorModal').classList.contains('hidden')) closeEditor();
+    }, true);
+  }
+
+  window.HTMLStudioReview = {
+    version: '8.5.0-skeleton-wireframe-20260816',
+    isWireframe: function () { return wireframe; },
+    setWireframe: setWireframe,
+    toggleWireframe: toggleWireframe,
+    addNote: addNote,
+    getNotesForPage: getNotesForPage,
+    getAllNotes: function () { return clone(review.notes || {}); },
+    exportProjectReview: exportProjectReview,
+    importProjectReview: importProjectReview,
+    refreshNotes: function () { renderNotes(); syncNotePaths(); },
+    showNotes: function (value) { showNotes = !!value; if ($('showNotesInput')) $('showNotesInput').checked = showNotes; syncNotePaths(); renderPins(); }
+  };
+
+  try {
+    if (!appConfig.projectId && !appConfig.forceNewProject) loadLocal();
+    else review = { schemaVersion: 1, notes: {} };
+    bindMessages();
+    bindUi();
+    renderNotes();
+    setStatus('ready');
+  } catch (error) {
+    console.error('[HTML Studio] Review module failed:', error);
+    setStatus('error');
+    plus.toast('Wireframe and editor notes could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

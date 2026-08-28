@@ -1,0 +1,397 @@
+<style>
+.element-export-section .section-body{gap:10px}
+.element-export-summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;border:1px solid #deded9;border-radius:9px;background:#f8f8f6;font-size:11px}
+.element-export-summary strong{font-size:12px}
+.element-export-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.element-export-selection-list{display:flex;flex-wrap:wrap;gap:5px}
+.element-export-chip{display:inline-flex;align-items:center;max-width:100%;padding:4px 7px;border:1px solid #d8d8d3;border-radius:999px;background:#fff;color:#686863;font-size:9px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.element-export-note,.element-export-progress{font-size:9px;line-height:1.45;color:#80807a}
+.element-export-layer-pick{grid-column:3;appearance:none;width:17px;height:17px;min-width:17px;padding:0;margin:0 2px 0 0;border:1px solid #c8c8c3;border-radius:5px;background:#fff;color:#fff;display:grid;place-items:center;font-size:10px;line-height:1;cursor:pointer}
+.element-export-layer-pick:hover{border-color:#777771}
+.element-export-layer-pick[aria-pressed="true"]{background:#111;border-color:#111;color:#fff}
+.layer-row.element-export-marked{box-shadow:inset 3px 0 0 #111}
+</style>
+<script>
+(function(){
+  'use strict';
+  var plus=window.HTMLStudioPlus;if(!plus)return;
+  var HTML2CANVAS_URL='https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+  var selectedPaths={};
+  var rendererSourcePromise=null;
+  var lastPage='';
+
+  function $(id){return document.getElementById(id)}
+  function qsa(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel))}
+  function clean(v){return String(v==null?'':v).replace(/\s+/g,' ').trim()}
+  function setStatus(v){document.documentElement.setAttribute('data-html-studio-element-export',v)}
+  function delay(ms){return new Promise(function(r){window.setTimeout(r,ms)})}
+
+  function safeName(v,fallback){
+    var s=clean(v||fallback||'element').replace(/[\\/:*?"<>|]+/g,'-').replace(/[^a-zA-Z0-9._ -]+/g,'-').replace(/\s+/g,'-').replace(/-+/g,'-').replace(/^[-.]+|[-.]+$/g,'');
+    return (s||'element').slice(0,80)
+  }
+  function pageName(){return $('currentPageLabel')?clean($('currentPageLabel').textContent||'page.html'):'page.html'}
+  function pageStem(){return safeName(pageName().replace(/\.(?:html?|txt)$/i,''),'page')}
+
+  function pathArray(v){
+    if(!v||v==='body')return[];
+    if(!/^\d+(?:\.\d+)*$/.test(String(v)))return null;
+    return String(v).split('.').map(function(x){return parseInt(x,10)})
+  }
+  function resolvePath(doc,path){
+    if(!doc||!doc.body)return null;
+    if(path==='body')return doc.body;
+    var parts=pathArray(path);if(!parts)return null;
+    var node=doc.body;
+    for(var i=0;i<parts.length;i++){
+      if(!node.children||!node.children[parts[i]])return null;
+      node=node.children[parts[i]]
+    }
+    return node
+  }
+  function currentPath(){
+    try{if(window.HTMLStudioLayers&&typeof window.HTMLStudioLayers.getActivePath==='function')return String(window.HTMLStudioLayers.getActivePath()||'')}catch(_){}
+    return''
+  }
+  function exportPaths(){
+    var list=Object.keys(selectedPaths).filter(function(p){return p&&p!=='body'});
+    if(list.length)return list;
+    var p=currentPath();return p&&p!=='body'?[p]:[]
+  }
+
+  function elementLabel(el,path,index){
+    if(!el)return'element-'+(index+1);
+    var named=clean(el.getAttribute&&el.getAttribute('data-layer-name'));if(named)return named;
+    if(el.id)return el.id;
+    if(el.tagName==='IMG')return clean(el.getAttribute('alt'))||'image-'+(index+1);
+    var text=clean(el.textContent).slice(0,42);if(text&&el.tagName!=='SCRIPT'&&el.tagName!=='STYLE')return text;
+    var cls=typeof el.className==='string'?clean(el.className).split(' ')[0]:'';
+    if(cls)return el.tagName.toLowerCase()+'-'+cls;
+    return el.tagName.toLowerCase()+'-'+String(path||index+1).replace(/\./g,'-')
+  }
+  function parseTargets(source,paths){
+    var doc=new DOMParser().parseFromString(String(source||''),'text/html');
+    var out=[];
+    for(var i=0;i<paths.length;i++){
+      var el=resolvePath(doc,paths[i]);
+      if(!el||el===doc.body)throw new Error('One selected layer is no longer available. Refresh Layers and select it again.');
+      out.push({path:paths[i],element:el,label:elementLabel(el,paths[i],i)})
+    }
+    return{doc:doc,targets:out}
+  }
+
+  function buildInspector(){
+    var host=$('inspectorContent');if(!host||$('elementExportSection'))return;
+    var section=document.createElement('section');
+    section.id='elementExportSection';section.className='control-section element-export-section';
+    section.innerHTML=''+
+      '<button class="section-toggle" type="button"><span>Element Export</span><span>⌃</span></button>'+
+      '<div class="section-body" id="elementExportControls">'+
+        '<div class="element-export-summary"><span><strong id="elementExportCount">0</strong> selected</span><span id="elementExportMode">Current</span></div>'+
+        '<div class="element-export-selection-list" id="elementExportSelectionList"></div>'+
+        '<div class="element-export-actions"><button class="button secondary" id="elementExportAddCurrentBtn" type="button">Add current</button><button class="button secondary" id="elementExportClearBtn" type="button">Clear multi-select</button></div>'+
+        '<div class="field-help">Check multiple items in Layers, or select an element on canvas and choose Add current. One item downloads directly; 2+ items export as ZIP.</div>'+
+        '<label class="field-label" for="elementExportFormatInput">Format</label>'+
+        '<select class="field" id="elementExportFormatInput"><option value="html">HTML (.html)</option><option value="txt">Code (.txt)</option><option value="svg">SVG (.svg)</option><option value="png">PNG · transparent</option><option value="jpeg">JPEG</option></select>'+
+        '<div id="elementExportImageOptions" class="hidden">'+
+          '<label class="field-label" for="elementExportScaleInput">Image scale</label><select class="field" id="elementExportScaleInput"><option value="1">1×</option><option value="2" selected>2×</option><option value="3">3×</option></select>'+
+          '<div id="elementExportJpegOptions" class="hidden"><label class="field-label" for="elementExportJpegBgInput">JPEG background</label><input class="field" id="elementExportJpegBgInput" type="color" value="#ffffff"></div>'+
+          '<div class="element-export-note" id="elementExportImageNote"></div>'+
+        '</div>'+
+        '<button class="button primary full-width-button" id="elementExportBtn" type="button">Export element</button>'+
+        '<div class="element-export-progress" id="elementExportProgress"></div>'+
+        '<a class="button secondary full-width-button hidden" id="elementExportDownloadReady" href="#" download>Download generated file</a>'+
+      '</div>';
+    host.appendChild(section);
+    section.querySelector('.section-toggle').addEventListener('click',function(){var body=$('elementExportControls');if(body)body.classList.toggle('collapsed')})
+  }
+
+  function labelForPath(path){
+    try{var src=plus.readSource();var doc=new DOMParser().parseFromString(src,'text/html');var el=resolvePath(doc,path);return el?elementLabel(el,path,0):path}catch(_){return path}
+  }
+  function refreshUi(){
+    buildInspector();
+    var multi=Object.keys(selectedPaths).filter(function(p){return p&&p!=='body'});
+    var effective=multi.length?multi:exportPaths();
+    if($('elementExportCount'))$('elementExportCount').textContent=String(effective.length);
+    if($('elementExportMode'))$('elementExportMode').textContent=multi.length?'Multi-select':'Current';
+    if($('elementExportBtn'))$('elementExportBtn').textContent=effective.length>1?'Export '+effective.length+' elements as ZIP':'Export element';
+    var list=$('elementExportSelectionList');if(list){list.innerHTML='';multi.slice(0,6).forEach(function(path){var chip=document.createElement('span');chip.className='element-export-chip';chip.textContent=labelForPath(path);chip.title=path;list.appendChild(chip)});if(multi.length>6){var more=document.createElement('span');more.className='element-export-chip';more.textContent='+'+(multi.length-6)+' more';list.appendChild(more)}}
+    var cp=currentPath();if($('elementExportAddCurrentBtn'))$('elementExportAddCurrentBtn').textContent=cp&&selectedPaths[cp]?'Remove current':'Add current';
+    syncLayerPickers()
+  }
+
+  function togglePath(path){if(!path||path==='body')return;if(selectedPaths[path])delete selectedPaths[path];else selectedPaths[path]=true;refreshUi()}
+  function syncLayerPickers(){
+    var tree=$('layersTree');if(!tree)return;
+    qsa('.layer-row[data-layer-path]',tree).forEach(function(row){
+      var path=row.getAttribute('data-layer-path')||'';if(!path||path==='body')return;
+      var pick=row.querySelector('.element-export-layer-pick');
+      if(!pick){
+        pick=document.createElement('button');pick.type='button';pick.className='element-export-layer-pick';pick.title='Select for element export';pick.setAttribute('aria-label','Select layer for export');
+        var handle=row.querySelector('.layer-drag-handle');if(handle&&handle.parentNode===row)row.insertBefore(pick,handle.nextSibling);else row.insertBefore(pick,row.firstChild);
+        pick.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();togglePath(path)})
+      }
+      var on=!!selectedPaths[path];pick.setAttribute('aria-pressed',on?'true':'false');pick.textContent=on?'✓':'';row.classList.toggle('element-export-marked',on)
+    })
+  }
+
+  function updateFormatUi(){
+    var format=$('elementExportFormatInput')?$('elementExportFormatInput').value:'html';
+    var raster=format==='png'||format==='jpeg';
+    if($('elementExportImageOptions'))$('elementExportImageOptions').classList.toggle('hidden',!raster);
+    if($('elementExportJpegOptions'))$('elementExportJpegOptions').classList.toggle('hidden',format!=='jpeg');
+    if($('elementExportImageNote')){
+      if(format==='jpeg')$('elementExportImageNote').textContent='JPEG cannot contain transparent pixels. UnScriptly flattens transparency onto the selected background color.';
+      else if(format==='png')$('elementExportImageNote').textContent='PNG preserves transparent pixels outside the selected element. Backgrounds painted by the element itself remain visible.';
+      else $('elementExportImageNote').textContent='';
+    }
+  }
+
+  var activeDownloadUrl='';
+  function isAppleTouchBrowser(){
+    var nav=window.navigator||{};
+    var platform=String(nav.platform||'');
+    var ua=String(nav.userAgent||'');
+    return /iPad|iPhone|iPod/i.test(ua)||(platform==='MacIntel'&&Number(nav.maxTouchPoints||0)>1)
+  }
+  function escapeHtml(value){
+    return String(value==null?'':value).replace(/[&<>"]/g,function(ch){return ch==='&'?'&amp;':ch==='<'?'&lt;':ch==='>'?'&gt;':'&quot;'})
+  }
+  function reserveDownloadWindow(asyncExpected){
+    if(!asyncExpected||!isAppleTouchBrowser())return null;
+    try{
+      var w=window.open('about:blank','_blank');
+      if(w&&w.document){
+        w.document.open();
+        w.document.write('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Preparing export…</title><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;color:#111"><strong>Preparing UnScriptly export…</strong><p style="color:#666;line-height:1.5">This tab will update when the file is ready. If it does not, return to UnScriptly and tap the generated download link.</p></body>');
+        w.document.close();
+      }
+      return w;
+    }catch(_){return null}
+  }
+  function handoffReservedWindow(reservedWindow,url,name){
+    if(!reservedWindow||reservedWindow.closed)return;
+    try{
+      var safeName=escapeHtml(name||'download');
+      var safeUrl=String(url||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      reservedWindow.document.open();
+      reservedWindow.document.write('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Download ready</title><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;color:#111"><strong>Your export is ready.</strong><p style="color:#666;line-height:1.5">If the download does not start automatically, tap the button below.</p><p><a id="downloadLink" href="'+safeUrl+'" download="'+safeName+'" style="display:inline-block;padding:12px 16px;border-radius:10px;background:#111;color:#fff;text-decoration:none;font-weight:700">Download '+safeName+'</a></p><script>setTimeout(function(){try{document.getElementById(\'downloadLink\').click()}catch(e){}},80);<\/script></body>');
+      reservedWindow.document.close();
+    }catch(_){try{reservedWindow.location.href=url}catch(__){}}
+  }
+  function clearDownloadReady(){
+    var link=$('elementExportDownloadReady');if(link){link.classList.add('hidden');link.removeAttribute('href');link.removeAttribute('download')}
+    if(activeDownloadUrl){try{URL.revokeObjectURL(activeDownloadUrl)}catch(_){} activeDownloadUrl=''}
+  }
+  function downloadBlob(blob,name,reservedWindow){
+    clearDownloadReady();var url=URL.createObjectURL(blob);activeDownloadUrl=url;
+    var link=$('elementExportDownloadReady');if(link){link.href=url;link.download=name;link.textContent='Download '+name;link.classList.remove('hidden')}
+    var a=document.createElement('a');a.href=url;a.download=name;a.rel='noopener';a.style.display='none';document.body.appendChild(a);try{a.click()}catch(_){}a.remove();
+    handoffReservedWindow(reservedWindow,url,name);
+    window.setTimeout(function(){if(link&&link.href===url)link.textContent='Download '+name+' again'},800);
+    window.setTimeout(function(){if(activeDownloadUrl===url){try{URL.revokeObjectURL(url)}catch(_){}activeDownloadUrl='';if(link){link.classList.add('hidden');link.removeAttribute('href');link.removeAttribute('download')}}},120000)
+  }
+  function toBase64(blob){return new Promise(function(resolve,reject){var r=new FileReader();r.onload=function(){resolve(String(r.result||'').split(',')[1]||'')};r.onerror=function(){reject(r.error||new Error('File could not be encoded.'))};r.readAsDataURL(blob)})}
+  function zipOnServer(items){
+    if(!(window.google&&google.script&&google.script.run))return Promise.reject(new Error('ZIP export requires the deployed Apps Script web app.'));
+    return new Promise(function(resolve,reject){google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).htmlStudioExportElementZip(items)})
+  }
+  function downloadZip(result,reservedWindow){var raw=atob(String(result&&result.base64||''));var bytes=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);downloadBlob(new Blob([bytes],{type:(result&&result.mimeType)||'application/zip'}),(result&&result.name)||'unscriptly-elements.zip',reservedWindow)}
+
+  function uniqueFiles(targets,format){
+    var used={};var ext=format==='txt'?'.txt':format==='html'?'.html':format==='svg'?'.svg':format==='jpeg'?'.jpg':'.png';
+    return targets.map(function(t,i){var base=safeName(pageStem()+'-'+t.label,'element-'+(i+1));var name=base+ext;var n=2;while(used[name.toLowerCase()]){name=base+'-'+n+ext;n++}used[name.toLowerCase()]=1;return name})
+  }
+  function exportCode(format,source,paths,reservedWindow){
+    var parsed=parseTargets(source,paths);var names=uniqueFiles(parsed.targets,format);var mime=format==='txt'?'text/plain':'text/html';
+    var items=parsed.targets.map(function(t,i){return{name:names[i],mimeType:mime,text:t.element.outerHTML}});
+    if(items.length===1){downloadBlob(new Blob([items[0].text],{type:mime+';charset=utf-8'}),items[0].name,reservedWindow);return Promise.resolve()}
+    return zipOnServer(items).then(function(result){downloadZip(result,reservedWindow)})
+  }
+
+  function withTimeout(promise,ms,message){
+    var timer;
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise(function(_,reject){timer=window.setTimeout(function(){reject(new Error(message||'Operation timed out.'))},ms)})
+    ]).then(function(value){window.clearTimeout(timer);return value},function(error){window.clearTimeout(timer);throw error})
+  }
+  function sanitizedCaptureHtml(source){
+    var doc=new DOMParser().parseFromString(String(source||''),'text/html');
+    qsa('script',doc).forEach(function(n){n.remove()});
+    qsa('meta[http-equiv]',doc).forEach(function(m){if(String(m.getAttribute('http-equiv')||'').toLowerCase()==='content-security-policy')m.remove()});
+    qsa('iframe,object,embed',doc).forEach(function(n){var p=doc.createElement('div');p.setAttribute('style','width:'+(n.getAttribute('width')||'100%')+';min-height:'+(n.getAttribute('height')||'180px')+';background:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.25);');if(n.parentNode)n.parentNode.replaceChild(p,n)});
+    qsa('*',doc).forEach(function(n){Array.prototype.slice.call(n.attributes||[]).forEach(function(a){if(/^on/i.test(a.name))n.removeAttribute(a.name);if((a.name==='href'||a.name==='src')&&/^javascript:/i.test(clean(a.value)))n.removeAttribute(a.name)});if(String(n.tagName||'').toLowerCase()==='img'){n.setAttribute('loading','eager');n.setAttribute('decoding','sync')}});
+    var pre=/^\s*<!doctype\s+html/i.test(String(source||''))?'<!DOCTYPE html>\n':'';return pre+doc.documentElement.outerHTML
+  }
+  function waitImages(doc,timeout){
+    var imgs=qsa('img',doc);if(!imgs.length)return Promise.resolve();
+    var work=Promise.all(imgs.map(function(img){if(img.complete)return Promise.resolve();return new Promise(function(resolve){img.addEventListener('load',resolve,{once:true});img.addEventListener('error',resolve,{once:true})})}));
+    return withTimeout(work,timeout||4500,'Image loading timed out.').catch(function(){})
+  }
+  function waitFonts(doc,timeout){
+    if(!doc||!doc.fonts||!doc.fonts.ready)return Promise.resolve();
+    return withTimeout(Promise.resolve(doc.fonts.ready).catch(function(){}),timeout||2800,'Font loading timed out.').catch(function(){})
+  }
+  function prepareFrame(source,width){
+    return new Promise(function(resolve,reject){
+      var frame=document.createElement('iframe');var settled=false;
+      frame.setAttribute('aria-hidden','true');frame.setAttribute('sandbox','allow-same-origin allow-scripts');
+      frame.style.cssText='position:fixed;left:-20000px;top:0;width:'+width+'px;height:1000px;border:0;opacity:0;pointer-events:none;z-index:-1';document.body.appendChild(frame);
+      var timer=window.setTimeout(function(){if(settled)return;settled=true;frame.remove();reject(new Error('Element capture frame timed out before the page became ready.'))},12000);
+      frame.onload=function(){
+        if(settled)return;var doc;
+        try{doc=frame.contentDocument;if(!doc||!doc.documentElement)throw new Error('Element capture document is unavailable.')}catch(e){settled=true;window.clearTimeout(timer);frame.remove();reject(e);return}
+        Promise.all([waitFonts(doc,2800),waitImages(doc,4800)]).then(function(){
+          if(settled)return;settled=true;window.clearTimeout(timer);
+          var body=doc.body,root=doc.documentElement;
+          var height=Math.max(root.scrollHeight,root.offsetHeight,body?body.scrollHeight:0,body?body.offsetHeight:0,1);
+          var measuredWidth=Math.max(Number(width||0),root.scrollWidth||0,body?body.scrollWidth:0,1);
+          frame.style.width=measuredWidth+'px';frame.style.height=height+'px';
+          resolve({frame:frame,doc:doc,width:measuredWidth,height:height})
+        }).catch(function(error){if(settled)return;settled=true;window.clearTimeout(timer);frame.remove();reject(error)})
+      };
+      frame.srcdoc=sanitizedCaptureHtml(source)
+    })
+  }
+
+  function rendererSourceFromServer(){
+    if(!(window.google&&google.script&&google.script.run))return Promise.reject(new Error('Apps Script renderer proxy is unavailable.'));
+    return withTimeout(new Promise(function(resolve,reject){google.script.run.withSuccessHandler(function(source){resolve(String(source||''))}).withFailureHandler(function(error){reject(error instanceof Error?error:new Error(String(error&&error.message||error||'Renderer proxy failed.')))}).htmlStudioGetPngRendererSource()}),15000,'Apps Script PNG renderer proxy timed out.')
+  }
+  function rendererSourceFromBrowser(){
+    if(!window.fetch)return Promise.reject(new Error('Browser fetch is unavailable.'));
+    return withTimeout(fetch(HTML2CANVAS_URL,{mode:'cors',cache:'force-cache',credentials:'omit'}).then(function(response){if(!response.ok)throw new Error('Image renderer returned HTTP '+response.status+'.');return response.text()}),9000,'Image renderer browser download timed out.')
+  }
+  function loadRendererSource(){
+    if(rendererSourcePromise)return rendererSourcePromise;
+    var primary=(window.google&&google.script&&google.script.run)?rendererSourceFromServer():rendererSourceFromBrowser();
+    rendererSourcePromise=primary.catch(function(primaryError){console.warn('[HTML Studio Element Export] Primary renderer source failed; trying browser CDN.',primaryError);return rendererSourceFromBrowser()}).then(function(source){if(!source||source.length<10000||source.indexOf('html2canvas')===-1)throw new Error('Image renderer payload was invalid.');return source});
+    return rendererSourcePromise
+  }
+  function injectRendererSource(win,doc,source){
+    if(win&&win.html2canvas)return win.html2canvas;
+    if(!win||!doc)throw new Error('Element capture frame is unavailable.');
+    if(!source)throw new Error('Image renderer source is empty.');
+    var script=doc.createElement('script');script.type='text/javascript';script.setAttribute('data-unscriptly-element-renderer','true');script.text=String(source);(doc.head||doc.documentElement).appendChild(script);
+    if(!win.html2canvas){script.remove();throw new Error('Image renderer source loaded but did not initialize in the capture frame.');}
+    script.remove();return win.html2canvas
+  }
+  function captureWidth(){
+    var shell=$('previewShell');
+    var d=shell?String(shell.getAttribute('data-device')||''):'';
+    var widths={mobile:390,tablet:768,desktop:1440};
+    var width=Number(widths[d]||0);
+    if(!(width>=300)){var frame=$('previewFrame');width=frame?Math.round(Number(frame.getBoundingClientRect().width||0)):0}
+    if(!(width>=300)||!isFinite(width))width=1440;
+    return Number(width)
+  }
+  function safeScale(width,height,requested){
+    var appleTouch=isAppleTouchBrowser();var maxPixels=appleTouch?8000000:16000000;var maxDimension=appleTouch?6144:8192;var scale=Number(requested||1)||1;
+    scale=Math.min(scale,maxDimension/Math.max(width,1),maxDimension/Math.max(height,1),Math.sqrt(maxPixels/Math.max(width*height,1)));
+    return Math.max(.18,scale)
+  }
+  function captureElementWithHtml2Canvas(prepared,path,requestedScale){
+    var win=prepared.frame.contentWindow,doc=prepared.doc,target=resolvePath(doc,path);
+    if(!target||target===doc.body)return Promise.reject(new Error('Selected element could not be resolved for image export.'));
+    return loadRendererSource().then(function(source){
+      var renderer=injectRendererSource(win,doc,source);var rect=target.getBoundingClientRect();if(!rect.width||!rect.height)throw new Error('Selected element has no visible size.');
+      var scale=safeScale(rect.width,rect.height,requestedScale);
+      return withTimeout(delay(50).then(function(){return renderer(target,{backgroundColor:null,logging:false,useCORS:true,allowTaint:false,foreignObjectRendering:false,scale:scale,windowWidth:prepared.width,windowHeight:prepared.height,scrollX:0,scrollY:0,imageTimeout:3200,removeContainer:true,onclone:function(clonedDoc){try{qsa('script,iframe,object,embed,video,audio',clonedDoc).forEach(function(node){node.remove()});var style=clonedDoc.createElement('style');style.textContent='*{animation:none!important;transition:none!important;}html,body{scroll-behavior:auto!important;}';(clonedDoc.head||clonedDoc.documentElement).appendChild(style)}catch(_){}}})}),26000,'Primary element capture timed out.')
+    })
+  }
+  function captureElementWithSimplifiedRenderer(prepared,path,requestedScale){
+    var doc=prepared.doc,target=resolvePath(doc,path);if(!target||target===doc.body)return Promise.reject(new Error('Selected element could not be resolved for simplified image export.'));
+    return loadRendererSource().then(function(source){
+      var win=prepared.frame.contentWindow;var renderer=injectRendererSource(win,doc,source);var rect=target.getBoundingClientRect();var retryScale=Math.min(1,safeScale(rect.width,rect.height,requestedScale));
+      return withTimeout(delay(60).then(function(){return renderer(target,{backgroundColor:null,logging:false,useCORS:false,allowTaint:false,foreignObjectRendering:false,scale:retryScale,windowWidth:prepared.width,windowHeight:prepared.height,scrollX:0,scrollY:0,imageTimeout:700,removeContainer:true,ignoreElements:function(node){var tag=String(node&&node.tagName||'').toLowerCase();return tag==='iframe'||tag==='object'||tag==='embed'||tag==='video'||tag==='audio'},onclone:function(clonedDoc){try{qsa('script,iframe,object,embed,video,audio',clonedDoc).forEach(function(node){node.remove()});var style=clonedDoc.createElement('style');style.textContent='*{animation:none!important;transition:none!important;}html,body{scroll-behavior:auto!important;}';(clonedDoc.head||clonedDoc.documentElement).appendChild(style)}catch(_){}}})}),15000,'Simplified element capture timed out.')
+    })
+  }
+  function downscaleCanvas(canvas,maxPixels){
+    var width=Number(canvas&&canvas.width||0),height=Number(canvas&&canvas.height||0),pixels=width*height;if(!canvas||!width||!height||!pixels||pixels<=maxPixels)return canvas;
+    var ratio=Math.sqrt(maxPixels/pixels),doc=canvas.ownerDocument||document,reduced=doc.createElement('canvas');reduced.width=Math.max(1,Math.round(width*ratio));reduced.height=Math.max(1,Math.round(height*ratio));var ctx=reduced.getContext('2d');if(!ctx)return canvas;ctx.drawImage(canvas,0,0,reduced.width,reduced.height);return reduced
+  }
+  function encodeTimeoutMs(canvas){
+    var pixels=Math.max(1,Number(canvas&&canvas.width||1)*Number(canvas&&canvas.height||1));var megapixels=pixels/1000000;var base=isAppleTouchBrowser()?14000:9000;var perMp=isAppleTouchBrowser()?3200:1800;return Math.min(isAppleTouchBrowser()?48000:32000,Math.max(base,Math.round(base+megapixels*perMp)))
+  }
+  function dataUrlBlob(data,type){var raw=atob(data.split(',')[1]),bytes=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);return new Blob([bytes],{type:type})}
+  function encodeCanvasOnce(canvas,format,bg){
+    return new Promise(function(resolve,reject){
+      if(!canvas){reject(new Error((format==='jpeg'?'JPEG':'PNG')+' renderer returned no canvas.'));return}
+      if(format==='jpeg'){
+        try{var out=document.createElement('canvas');out.width=canvas.width;out.height=canvas.height;var ctx=out.getContext('2d');if(!ctx)throw new Error('JPEG context unavailable.');ctx.fillStyle=bg||'#ffffff';ctx.fillRect(0,0,out.width,out.height);ctx.drawImage(canvas,0,0);
+          if(!out.toBlob){resolve(dataUrlBlob(out.toDataURL('image/jpeg',.92),'image/jpeg'));return}
+          out.toBlob(function(blob){blob?resolve(blob):reject(new Error('JPEG conversion failed.'))},'image/jpeg',.92)
+        }catch(error){reject(error)}
+        return
+      }
+      if(!canvas.toBlob){try{var data=canvas.toDataURL('image/png');resolve(dataUrlBlob(data,'image/png'))}catch(error){reject(error)}return}
+      canvas.toBlob(function(blob){blob?resolve(blob):reject(new Error('PNG conversion failed. A cross-origin image may have blocked canvas export.'))},'image/png')
+    })
+  }
+  function encodeRasterBlob(canvas,format,bg){
+    var first=isAppleTouchBrowser()?downscaleCanvas(canvas,format==='jpeg'?6500000:8000000):canvas;
+    if($('elementExportProgress'))$('elementExportProgress').textContent=(format==='jpeg'?'Encoding JPEG…':'Encoding PNG…');
+    return withTimeout(encodeCanvasOnce(first,format,bg),encodeTimeoutMs(first),(format==='jpeg'?'JPEG':'PNG')+' encoding is taking longer than expected.').catch(function(firstError){
+      console.warn('[HTML Studio Element Export] first raster encoding pass failed; retrying at a safer size.',firstError);
+      if($('elementExportProgress'))$('elementExportProgress').textContent=(format==='jpeg'?'JPEG':'PNG')+' encoding is taking longer on this device. Retrying at a safer size…';
+      var retry=downscaleCanvas(first,isAppleTouchBrowser()?(format==='jpeg'?3500000:4500000):(format==='jpeg'?6500000:7500000));
+      if(retry===first&&first.width*first.height>1000000){var doc=first.ownerDocument||document;retry=doc.createElement('canvas');retry.width=Math.max(1,Math.round(first.width*.82));retry.height=Math.max(1,Math.round(first.height*.82));var ctx=retry.getContext('2d');if(ctx)ctx.drawImage(first,0,0,retry.width,retry.height);else retry=first}
+      return withTimeout(encodeCanvasOnce(retry,format,bg),Math.min(52000,encodeTimeoutMs(retry)+8000),(format==='jpeg'?'JPEG':'PNG')+' encoding timed out after the reduced-size retry.')
+    })
+  }
+
+  function inlineComputedStyles(sourceRoot,cloneRoot,win){
+    var sourceNodes=[sourceRoot].concat(qsa('*',sourceRoot));var cloneNodes=[cloneRoot].concat(qsa('*',cloneRoot));var len=Math.min(sourceNodes.length,cloneNodes.length);
+    for(var i=0;i<len;i++){var computed=win.getComputedStyle(sourceNodes[i]);var css='';for(var j=0;j<computed.length;j++){var prop=computed[j];css+=prop+':'+computed.getPropertyValue(prop)+';'}cloneNodes[i].setAttribute('style',css)}
+  }
+  function elementSvgString(prepared,path){
+    var target=resolvePath(prepared.doc,path);if(!target||target===prepared.doc.body)throw new Error('Selected element could not be resolved for SVG export.');
+    var r=target.getBoundingClientRect(),width=Math.max(1,Math.ceil(r.width)),height=Math.max(1,Math.ceil(r.height));var clone=target.cloneNode(true);qsa('script',clone).forEach(function(node){node.remove()});inlineComputedStyles(target,clone,prepared.frame.contentWindow);
+    if(String(target.tagName||'').toLowerCase()==='svg'){clone.setAttribute('xmlns','http://www.w3.org/2000/svg');if(!clone.getAttribute('width'))clone.setAttribute('width',String(width));if(!clone.getAttribute('height'))clone.setAttribute('height',String(height));if(!clone.getAttribute('viewBox'))clone.setAttribute('viewBox','0 0 '+width+' '+height);return new XMLSerializer().serializeToString(clone)}
+    clone.setAttribute('xmlns','http://www.w3.org/1999/xhtml');clone.setAttribute('style',(clone.getAttribute('style')||'')+';position:relative!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;margin:0!important;box-sizing:border-box!important;');var xhtml=new XMLSerializer().serializeToString(clone);
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'" viewBox="0 0 '+width+' '+height+'"><foreignObject x="0" y="0" width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:'+width+'px;height:'+height+'px;overflow:visible">'+xhtml+'</div></foreignObject></svg>'
+  }
+  function exportSvg(source,paths,reservedWindow){
+    var parsed=parseTargets(source,paths),names=uniqueFiles(parsed.targets,'svg'),prepared=null,items=[];
+    return prepareFrame(source,captureWidth()).then(function(frameData){prepared=frameData;parsed.targets.forEach(function(t,i){var text=elementSvgString(prepared,t.path);if(parsed.targets.length===1)downloadBlob(new Blob([text],{type:'image/svg+xml;charset=utf-8'}),names[i],reservedWindow);else items.push({name:names[i],mimeType:'image/svg+xml',text:text})});if(prepared&&prepared.frame)prepared.frame.remove();prepared=null;if(items.length>1)return zipOnServer(items).then(function(result){downloadZip(result,reservedWindow)})},function(error){if(prepared&&prepared.frame)prepared.frame.remove();throw error})
+  }
+  function captureElementWithForeignObject(prepared,path,scale){
+    return new Promise(function(resolve,reject){try{var svg=elementSvgString(prepared,path),blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'}),url=URL.createObjectURL(blob),image=new Image();image.onload=function(){try{var target=resolvePath(prepared.doc,path),r=target.getBoundingClientRect(),actualScale=safeScale(r.width,r.height,scale),canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(r.width*actualScale));canvas.height=Math.max(1,Math.round(r.height*actualScale));var ctx=canvas.getContext('2d');if(!ctx)throw new Error('Canvas context unavailable.');ctx.scale(actualScale,actualScale);ctx.drawImage(image,0,0);URL.revokeObjectURL(url);resolve(canvas)}catch(error){URL.revokeObjectURL(url);reject(error)}};image.onerror=function(){URL.revokeObjectURL(url);reject(new Error('Native element renderer could not render this selection.'))};image.src=url}catch(error){reject(error)}})
+  }
+  function renderElementCapture(prepared,path,scale){
+    var task=captureElementWithHtml2Canvas(prepared,path,scale).catch(function(primaryError){console.warn('[HTML Studio Element Export] primary same-realm capture failed; retrying simplified capture.',primaryError);if($('elementExportProgress'))$('elementExportProgress').textContent='Primary capture unavailable. Retrying simplified capture…';return captureElementWithSimplifiedRenderer(prepared,path,scale).catch(function(simpleError){console.warn('[HTML Studio Element Export] simplified capture failed; trying native fallback.',simpleError);if($('elementExportProgress'))$('elementExportProgress').textContent='Simplified capture unavailable. Trying native fallback…';return captureElementWithForeignObject(prepared,path,Math.min(1,scale)).catch(function(nativeError){var message='Element capture failed. Primary: '+String(primaryError&&primaryError.message||primaryError||'unknown')+' Simplified: '+String(simpleError&&simpleError.message||simpleError||'unknown')+' Native: '+String(nativeError&&nativeError.message||nativeError||'unknown');throw new Error(message)})})});
+    return withTimeout(task,56000,'Element export timed out. Try a lower image scale or export fewer elements.')
+  }
+  function exportImages(format,source,paths,reservedWindow){
+    var parsed=parseTargets(source,paths),names=uniqueFiles(parsed.targets,format),scale=Number($('elementExportScaleInput')?$('elementExportScaleInput').value:2)||2,bg=$('elementExportJpegBgInput')?$('elementExportJpegBgInput').value:'#ffffff';var prepared=null,items=[];
+    return prepareFrame(source,captureWidth()).then(function(frameData){prepared=frameData;var chain=Promise.resolve();parsed.targets.forEach(function(t,i){chain=chain.then(function(){if($('elementExportProgress'))$('elementExportProgress').textContent='Rendering '+(i+1)+' of '+parsed.targets.length+'…';return renderElementCapture(prepared,t.path,scale).then(function(canvas){return encodeRasterBlob(canvas,format,bg)}).then(function(blob){if(parsed.targets.length===1){downloadBlob(blob,names[i],reservedWindow);return}return toBase64(blob).then(function(base64){items.push({name:names[i],mimeType:format==='jpeg'?'image/jpeg':'image/png',base64:base64})})})})});return chain}).then(function(){if(prepared&&prepared.frame)prepared.frame.remove();prepared=null;if(items.length>1)return zipOnServer(items).then(function(result){downloadZip(result,reservedWindow)})},function(err){if(prepared&&prepared.frame)prepared.frame.remove();throw err})
+  }
+
+  function doExport(){
+    if(!plus.hasPage()){plus.toast('Import or open a page first.','error');return}var paths=exportPaths();if(!paths.length){plus.toast('Select an element, Frame, or Group first. For multiple export, check layers in Layers.','error');return}var source=plus.readSource();if(!source){plus.toast('The active page source is unavailable.','error');return}
+    var format=$('elementExportFormatInput')?$('elementExportFormatInput').value:'html',asyncExpected=(format==='png'||format==='jpeg'||format==='svg'||paths.length>1),reservedWindow=reserveDownloadWindow(asyncExpected),btn=$('elementExportBtn'),old=btn?btn.textContent:'';clearDownloadReady();if(btn){btn.disabled=true;btn.textContent='Exporting…'}if($('elementExportProgress'))$('elementExportProgress').textContent=paths.length>1?'Preparing ZIP…':'Preparing element…';var task;
+    try{if(format==='html'||format==='txt')task=exportCode(format,source,paths,reservedWindow);else if(format==='svg')task=exportSvg(source,paths,reservedWindow);else task=exportImages(format,source,paths,reservedWindow)}catch(e){task=Promise.reject(e)}
+    Promise.resolve(task).then(function(){plus.toast(paths.length>1?paths.length+' elements exported as ZIP.':'Element export generated.');if($('elementExportProgress'))$('elementExportProgress').textContent='Export generated. If your browser did not download it automatically, use the download button below.'}).catch(function(e){if(reservedWindow&&!reservedWindow.closed){try{reservedWindow.close()}catch(_){}}console.error('[HTML Studio Element Export]',e);plus.toast(String(e&&e.message||e||'Element export failed.'),'error');if($('elementExportProgress'))$('elementExportProgress').textContent=String(e&&e.message||e||'Element export failed.')}).then(function(){if(btn){btn.disabled=false;btn.textContent=old||'Export element'}refreshUi()})
+  }
+
+  function bind(){
+
+    buildInspector();updateFormatUi();refreshUi();
+    $('elementExportFormatInput').addEventListener('change',updateFormatUi);
+    $('elementExportAddCurrentBtn').addEventListener('click',function(){var p=currentPath();if(!p||p==='body'){plus.toast('Select an element, Frame, or Group first.','error');return}togglePath(p)});
+    $('elementExportClearBtn').addEventListener('click',function(){selectedPaths={};refreshUi()});
+    $('elementExportBtn').addEventListener('click',doExport);
+    document.addEventListener('htmlstudio:plus-selection',function(){window.setTimeout(refreshUi,25)});
+    document.addEventListener('htmlstudio:layers-refresh',function(){window.setTimeout(syncLayerPickers,20)});
+    document.addEventListener('click',function(e){var t=e.target&&e.target.closest?e.target.closest('[data-library-view="layers"]'):null;if(t)window.setTimeout(syncLayerPickers,40)},true);
+    var tree=$('layersTree');if(tree&&window.MutationObserver)new MutationObserver(syncLayerPickers).observe(tree,{childList:true,subtree:true});
+    var label=$('currentPageLabel');if(label&&window.MutationObserver){lastPage=pageName();new MutationObserver(function(){var next=pageName();if(next!==lastPage){lastPage=next;selectedPaths={};window.setTimeout(refreshUi,20)}}).observe(label,{childList:true,subtree:true,characterData:true})}
+    setStatus('ready')
+  }
+
+  window.HTMLStudioElementExport={getSelectedPaths:function(){return Object.keys(selectedPaths)},clear:function(){selectedPaths={};refreshUi()},addPath:function(p){if(p&&p!=='body'){selectedPaths[p]=true;refreshUi()}},removePath:function(p){delete selectedPaths[p];refreshUi()},exportNow:doExport};
+  try{bind()}catch(e){console.error('[HTML Studio] Element Export module failed:',e);setStatus('error');plus.toast('Element export could not initialize. Core editing remains available.','error')}
+})();
+</script>

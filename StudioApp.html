@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title>UnScriptly HTML Studio</title>
+  <meta name="html-studio-build" content="<?= BUILD_ID ?>">
+  <?!= studioIncludeRequired_('StudioStyles'); ?>
+  <script>window.__HTML_STUDIO_CONFIG = <?!= APP_CONFIG_JSON ?>;</script>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand-group">
+        <button class="icon-btn" id="pagesToggleBtn" type="button" aria-label="Toggle workspace panel" title="Toggle workspace">☰</button>
+        <div class="brand-mark" aria-hidden="true">U</div>
+        <div>
+          <div class="brand-name">HTML Studio</div>
+          <div class="brand-sub">UnScriptly™ <span class="build-badge starting" id="buildStatusBadge" data-build="<?= BUILD_ID ?>">v8.11.0 · STARTING</span></div>
+        </div>
+      </div>
+
+      <div class="topbar-center">
+        <div class="mode-switch" role="group" aria-label="Preview mode">
+          <button id="selectModeBtn" class="seg-btn active" type="button">Select</button>
+          <button id="interactModeBtn" class="seg-btn" type="button">Interact</button>
+        </div>
+        <div class="divider-v"></div>
+        <div class="device-switch" role="group" aria-label="Device preview">
+          <button class="icon-btn device-btn active" data-device="desktop" type="button" title="Desktop">▱</button>
+          <button class="icon-btn device-btn" data-device="tablet" type="button" title="Tablet">▯</button>
+          <button class="icon-btn device-btn" data-device="mobile" type="button" title="Mobile">▯</button>
+        </div>
+        <div class="divider-v"></div>
+        <button class="icon-btn" id="undoBtn" type="button" title="Undo" disabled>↶</button>
+        <button class="icon-btn" id="redoBtn" type="button" title="Redo" disabled>↷</button>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="button ghost" id="previewModeBtn" type="button" title="Preview page without editor chrome">Preview</button>
+        <button class="button ghost" id="wireframeToggleBtn" type="button" aria-pressed="false" title="Toggle structural skeleton wireframe view">Wireframe</button>
+        <button class="button ghost" id="codeBtn" type="button">Code</button>
+        <button class="button ghost hide-small" id="copyBtn" type="button">Copy HTML</button>
+        <button class="button primary" id="exportBtn" type="button">Export</button>
+        <button class="icon-btn" id="settingsBtn" type="button" aria-label="Global styles and settings" title="Global styles and settings">⚙</button>
+        <button class="icon-btn mobile-only" id="inspectorToggleBtn" type="button" aria-label="Open inspector" title="Open inspector">▥</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar left-panel" id="leftPanel">
+        <div class="panel-heading library-heading">
+          <div>
+            <div class="eyebrow">Workspace</div>
+            <h2 id="libraryPanelTitle">Pages</h2>
+          </div>
+          <div class="workspace-heading-actions">
+            <button class="workspace-notes-btn" id="notesLauncherBtn" type="button" data-library-view="notes" aria-label="Open editor notes" title="Editor notes">
+              <span>Notes</span><span class="notes-count-badge" id="notesCountBadge">0</span>
+            </button>
+            <button class="icon-btn" id="addPageBtn" type="button" title="Add blank page">＋</button>
+          </div>
+        </div>
+
+        <div class="project-strip" id="projectStrip">
+          <button class="project-selector" id="projectBrowserBtn" type="button" title="Open projects saved in Google Drive">
+            <span class="project-selector-copy">
+              <span class="project-name" id="currentProjectName">Untitled Project</span>
+              <span class="project-save-status" id="projectSaveStatus">Not saved to Drive</span>
+            </span>
+            <span class="project-selector-caret" aria-hidden="true">⌄</span>
+          </button>
+          <button class="button secondary project-save-btn" id="projectQuickSaveBtn" type="button" title="Save project to Google Drive">Save</button>
+        </div>
+
+        <div class="library-tabs" role="tablist" aria-label="Workspace tools">
+          <button class="library-tab active" type="button" data-library-view="pages" role="tab" aria-selected="true">Pages</button>
+          <button class="library-tab" type="button" data-library-view="layers" role="tab" aria-selected="false">Layers</button>
+          <button class="library-tab" type="button" data-library-view="elements" role="tab" aria-selected="false">Elements</button>
+          <button class="library-tab" type="button" data-library-view="media" role="tab" aria-selected="false">Media</button>
+        </div>
+
+        <div class="library-view" id="pagesLibraryView" data-library-panel="pages">
+          <div class="import-actions">
+            <label class="button secondary file-button">
+              Upload HTML / TXT
+              <input id="fileInput" type="file" accept=".html,.htm,.txt,text/html,text/plain" multiple hidden>
+            </label>
+            <button class="button secondary" id="pasteBtn" data-action="open-paste-html" type="button">Paste HTML</button>
+          </div>
+
+          <div class="page-list" id="pageList"></div>
+
+          <div class="panel-section analysis-section">
+            <div class="section-title-row">
+              <h3>Analysis</h3>
+              <span class="status-dot" id="analysisStatus" title="Analysis status"></span>
+            </div>
+            <div class="stats-grid" id="analysisStats"></div>
+            <div class="issue-list" id="analysisIssues"></div>
+          </div>
+        </div>
+
+        <div class="library-view hidden layers-library-view" id="layersLibraryView" data-library-panel="layers">
+          <div class="library-controls sticky-library-controls layers-controls">
+            <div class="layers-title-row">
+              <div>
+                <label class="field-label no-margin" for="layerSearchInput">Layer structure</label>
+                <div class="field-help">Top layers paint in front. Drag the handle to reorder or nest inside frames/groups.</div>
+              </div>
+              <button class="icon-btn compact-icon-btn" id="refreshLayersBtn" type="button" title="Refresh layers">↻</button>
+            </div>
+            <input id="layerSearchInput" class="field" type="search" placeholder="Search layers…" autocomplete="off">
+            <div class="layers-toolbar-row">
+              <button class="button ghost mini-button" id="expandLayersBtn" type="button">Expand all</button>
+              <button class="button ghost mini-button" id="collapseLayersBtn" type="button">Collapse all</button>
+            </div>
+          </div>
+          <div class="layers-empty" id="layersEmptyState">Import a page to inspect its layer tree.</div>
+          <div class="layers-tree" id="layersTree" role="tree" aria-label="Page layers"></div>
+          <div class="layers-drop-help">
+            <strong>Drag behavior</strong>
+            <span>Drop above/below to change stacking order. Drop onto a Frame or Group to nest the layer.</span>
+          </div>
+        </div>
+
+        <div class="library-view hidden notes-library-view" id="notesLibraryView" data-library-panel="notes">
+          <div class="library-controls sticky-library-controls notes-controls">
+            <div class="notes-title-row">
+              <div>
+                <label class="field-label no-margin">Editor notes</label>
+                <div class="field-help">Attach feedback to exact page elements. Notes stay in the project and can be included in review exports.</div>
+              </div>
+              <button class="button secondary mini-button" id="addNoteBtn" type="button">+ Add note</button>
+            </div>
+            <div class="notes-toolbar-row">
+              <label class="check-row"><input id="showNotesInput" type="checkbox" checked> Show notes on canvas</label>
+              <select id="notesFilterInput" class="field compact-field" aria-label="Filter notes">
+                <option value="all">All notes</option>
+                <option value="open">Open</option>
+                <option value="resolved">Resolved</option>
+              </select>
+            </div>
+          </div>
+          <div class="notes-empty" id="notesEmptyState">Import or open a page to add editor notes.</div>
+          <div class="notes-list" id="notesList"></div>
+          <div class="notes-help"><strong>Tip</strong><span>Select an element first, then Add note—or click Add note and choose an element directly on the canvas.</span></div>
+        </div>
+
+        <div class="library-view hidden" id="elementsLibraryView" data-library-panel="elements">
+          <div class="library-controls sticky-library-controls">
+            <label class="field-label" for="insertPositionInput">Add elements</label>
+            <select id="insertPositionInput" class="field">
+              <option value="smart">Smart placement</option>
+              <option value="inside">Inside selected element</option>
+              <option value="after">After selected element</option>
+              <option value="before">Before selected element</option>
+              <option value="body">End of page</option>
+            </select>
+            <input id="elementSearchInput" class="field" type="search" placeholder="Search elements…" autocomplete="off">
+            <div class="field-help">Select an element in the preview to control where new content is inserted.</div>
+          </div>
+
+          <div class="element-catalog" id="elementCatalog">
+            <section class="element-group">
+              <div class="element-group-title">Layout</div>
+              <div class="element-grid">
+                <button class="element-tile" type="button" data-element="frame" data-search="frame artboard container nesting layout"><span class="element-glyph">▣</span><span>Frame</span></button>
+                <button class="element-tile" type="button" data-element="group" data-search="group nested layers bundle layout"><span class="element-glyph">⌗</span><span>Group</span></button>
+                <button class="element-tile" type="button" data-element="section" data-search="section block layout"><span class="element-glyph">▤</span><span>Section</span></button>
+                <button class="element-tile" type="button" data-element="container" data-search="container wrapper box"><span class="element-glyph">▭</span><span>Container</span></button>
+                <button class="element-tile" type="button" data-element="columns2" data-search="two columns grid layout"><span class="element-glyph">▥</span><span>2 Columns</span></button>
+                <button class="element-tile" type="button" data-element="columns3" data-search="three columns grid layout"><span class="element-glyph">▦</span><span>3 Columns</span></button>
+                <button class="element-tile" type="button" data-element="stack" data-search="stack vertical layout"><span class="element-glyph">☷</span><span>Stack</span></button>
+                <button class="element-tile" type="button" data-element="row" data-search="row horizontal flex layout"><span class="element-glyph">⇥</span><span>Row</span></button>
+              </div>
+            </section>
+
+            <section class="element-group">
+              <div class="element-group-title">Blocks &amp; Shapes</div>
+              <div class="element-grid">
+                <button class="element-tile" type="button" data-element="box" data-search="box rectangle shape"><span class="element-glyph">□</span><span>Box</span></button>
+                <button class="element-tile" type="button" data-element="card" data-search="card panel block"><span class="element-glyph">▣</span><span>Card</span></button>
+                <button class="element-tile" type="button" data-element="circle" data-search="circle round shape"><span class="element-glyph">○</span><span>Circle</span></button>
+                <button class="element-tile" type="button" data-element="divider" data-search="divider line horizontal rule"><span class="element-glyph">━</span><span>Divider</span></button>
+                <button class="element-tile" type="button" data-element="spacer" data-search="spacer whitespace gap"><span class="element-glyph">↕</span><span>Spacer</span></button>
+              </div>
+            </section>
+
+            <section class="element-group">
+              <div class="element-group-title">Text &amp; Actions</div>
+              <div class="element-grid">
+                <button class="element-tile" type="button" data-element="heading" data-search="heading title h2 text"><span class="element-glyph">H</span><span>Heading</span></button>
+                <button class="element-tile" type="button" data-element="paragraph" data-search="paragraph body copy text"><span class="element-glyph">¶</span><span>Paragraph</span></button>
+                <button class="element-tile" type="button" data-element="label" data-search="label eyebrow small text"><span class="element-glyph">Aa</span><span>Label</span></button>
+                <button class="element-tile" type="button" data-element="quote" data-search="quote blockquote text"><span class="element-glyph">“</span><span>Quote</span></button>
+                <button class="element-tile" type="button" data-element="button" data-search="button call to action cta"><span class="element-glyph">▰</span><span>Button</span></button>
+                <button class="element-tile" type="button" data-element="link" data-search="link anchor text"><span class="element-glyph">↗</span><span>Link</span></button>
+              </div>
+            </section>
+
+            <section class="element-group">
+              <div class="element-group-title">Media</div>
+              <div class="element-grid">
+                <button class="element-tile" type="button" data-element="image" data-search="image photo picture media"><span class="element-glyph">▧</span><span>Image</span></button>
+                <button class="element-tile" type="button" data-element="video" data-search="video movie media"><span class="element-glyph">▶</span><span>Video</span></button>
+                <button class="element-tile" type="button" data-element="audio" data-search="audio sound music media"><span class="element-glyph">♫</span><span>Audio</span></button>
+                <button class="element-tile" type="button" data-element="icon" data-search="icon material symbol"><span class="element-glyph">★</span><span>Icon</span></button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="library-view hidden" id="mediaLibraryView" data-library-panel="media">
+          <div class="media-drive-box">
+            <div class="element-group-title">Google Drive Media</div>
+            <div class="field-grid two media-folder-grid">
+              <select id="mediaFolderInput" class="field" aria-label="Media folder"></select>
+              <button class="button secondary" id="createMediaFolderBtn" type="button">New folder</button>
+            </div>
+            <div class="media-drive-actions">
+              <a class="button secondary hidden" id="openMediaDriveBtn" href="#" target="_blank" rel="noopener">Open Drive folder</a>
+              <button class="button secondary" id="refreshMediaLibraryBtn" type="button">Refresh</button>
+            </div>
+            <div class="field-help" id="mediaStorageSummary">Loading your shared Drive media library…</div>
+          </div>
+
+          <div class="media-upload-zone">
+            <label class="button primary file-button full-width-button">
+              Upload to Drive
+              <input id="mediaFileInput" type="file" accept="image/*,video/*,audio/*,.svg,image/svg+xml" multiple hidden>
+            </label>
+            <div class="field-help">Media is stored in Google Drive and shared across all UnScriptly projects. UnScriptly does not persist media file bytes in browser or app state.</div>
+            <div class="field-help media-operation-status" id="mediaOperationStatus"></div>
+          </div>
+
+          <div class="media-url-box">
+            <div class="field-grid two media-url-grid">
+              <select id="mediaUrlKindInput" class="field" aria-label="Media URL type">
+                <option value="image">Image</option>
+                <option value="video">Video</option>
+                <option value="audio">Audio</option>
+              </select>
+              <button class="button secondary" id="addMediaUrlBtn" type="button">Save URL to Drive</button>
+            </div>
+            <input id="mediaUrlInput" class="field" type="url" placeholder="https://example.com/image.jpg">
+            <div class="field-help">Hosted media URLs are downloaded server-side and saved into the selected Drive folder. The original remote URL is not used as library storage.</div>
+          </div>
+
+          <div class="media-library-head">
+            <div>
+              <div class="element-group-title">Media Library</div>
+              <div class="field-help" id="mediaLibrarySummary">Loading media…</div>
+            </div>
+          </div>
+          <div class="media-grid" id="mediaGrid"></div>
+        </div>
+      </aside>
+
+      <section class="canvas-area">
+        <div class="canvas-toolbar">
+          <div class="canvas-title-wrap">
+            <span class="safe-pill">SANDBOXED</span>
+            <span id="currentPageLabel">No page loaded</span>
+          </div>
+          <div class="canvas-meta">
+            <span id="viewportLabel">Responsive desktop</span>
+            <button class="text-btn" id="refreshBtn" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="canvas-stage" id="canvasStage">
+          <div class="empty-state" id="emptyState">
+            <div class="empty-icon">&lt;/&gt;</div>
+            <h1>Bring in your HTML.</h1>
+            <p>Upload HTML or TXT files containing HTML, or paste markup to begin editing visually.</p>
+            <div class="empty-actions">
+              <button class="button primary" id="emptyUploadBtn" type="button">Upload HTML / TXT</button>
+              <button class="button secondary" id="emptyPasteBtn" data-action="open-paste-html" type="button">Paste HTML</button>
+            </div>
+            <div class="feature-strip">
+              <span>Click-to-edit</span><span>Multi-page</span><span>Responsive preview</span><span>Export-ready</span>
+            </div>
+          </div>
+
+          <div class="preview-shell hidden" id="previewShell" data-device="desktop">
+            <div class="preview-frame-wrap">
+              <iframe
+                id="previewFrame"
+                title="HTML live preview"
+                sandbox="allow-scripts allow-forms allow-modals"
+                referrerpolicy="no-referrer"
+              ></iframe>
+              <div class="review-notes-overlay hidden" id="reviewNotesOverlay" aria-label="Editor note markers"></div>
+            </div>
+          </div>
+
+          <div class="loading-overlay hidden" id="loadingOverlay">
+            <div class="spinner"></div>
+            <span>Rendering preview…</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="sidebar inspector-panel" id="inspectorPanel">
+        <div class="panel-heading inspector-heading">
+          <div>
+            <div class="eyebrow">Inspector</div>
+            <h2 id="selectedElementTitle">Nothing selected</h2>
+          </div>
+          <button class="icon-btn" id="inspectorCloseBtn" type="button" aria-label="Collapse inspector" title="Collapse inspector">×</button>
+        </div>
+
+        <div id="inspectorEmpty" class="inspector-empty">
+          <div class="cursor-glyph">↖</div>
+          <p>Choose <strong>Select</strong>, then click an element in the preview.</p>
+        </div>
+
+        <div id="inspectorContent" class="inspector-content hidden">
+          <div class="selection-path" id="selectionPath"></div>
+
+          <section class="control-section" id="contentSection">
+            <button class="section-toggle" type="button" data-toggle="contentControls">
+              <span>Content</span><span>⌃</span>
+            </button>
+            <div class="section-body" id="contentControls">
+              <label class="field-label" for="textContentInput">Text</label>
+              <textarea id="textContentInput" class="field textarea" rows="3" placeholder="Element text"></textarea>
+              <div class="field-help">Changing text replaces the selected element's child content.</div>
+
+              <div id="linkControls" class="conditional-controls hidden">
+                <label class="field-label" for="hrefInput">Link URL</label>
+                <input id="hrefInput" class="field" type="text" placeholder="https://… or page.html">
+                <label class="check-row"><input id="newTabInput" type="checkbox"> Open in new tab</label>
+              </div>
+
+              <div id="imageControls" class="conditional-controls hidden">
+                <label class="field-label" for="srcInput">Image source</label>
+                <input id="srcInput" class="field" type="text" placeholder="https://…">
+                <label class="field-label" for="altInput">Alt text</label>
+                <input id="altInput" class="field" type="text" placeholder="Describe the image">
+              </div>
+
+              <div id="mediaElementControls" class="conditional-controls hidden">
+                <label class="field-label" for="mediaSrcInput">Media source</label>
+                <input id="mediaSrcInput" class="field" type="text" placeholder="https://… or data:…">
+                <div class="field-grid two">
+                  <label class="check-row"><input id="mediaControlsInput" type="checkbox"> Controls</label>
+                  <label class="check-row"><input id="mediaLoopInput" type="checkbox"> Loop</label>
+                  <label class="check-row"><input id="mediaAutoplayInput" type="checkbox"> Autoplay</label>
+                  <label class="check-row"><input id="mediaMutedInput" type="checkbox"> Muted</label>
+                </div>
+              </div>
+
+              <div id="iconControls" class="conditional-controls hidden">
+                <div class="section-title-row compact-title-row">
+                  <label class="field-label no-margin" for="iconNameInput">Material Symbol</label>
+                  <button class="text-btn" id="openIconPickerBtn" type="button">Browse icons</button>
+                </div>
+                <input id="iconNameInput" class="field" type="text" placeholder="home, search, star…">
+                <div class="field-grid two">
+                  <div>
+                    <label class="field-label" for="iconWeightInput">Icon weight</label>
+                    <select id="iconWeightInput" class="field">
+                      <option value="100">100</option><option value="200">200</option><option value="300">300</option>
+                      <option value="400" selected>400</option><option value="500">500</option><option value="600">600</option><option value="700">700</option>
+                    </select>
+                  </div>
+                  <label class="check-row icon-fill-row"><input id="iconFillInput" type="checkbox"> Filled icon</label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <button class="section-toggle" type="button" data-toggle="typographyControls">
+              <span>Typography</span><span>⌃</span>
+            </button>
+            <div class="section-body" id="typographyControls">
+              <label class="field-label" for="fontFamilyInput">Font family</label>
+              <select id="fontFamilyInput" class="field font-family-select">
+                <optgroup label="System fonts">
+                  <option value="__inherit__">Inherit / current</option>
+                  <option value="Arial">Arial</option>
+                  <option value="Georgia">Georgia</option>
+                  <option value="Times New Roman">Times New Roman</option>
+                  <option value="Verdana">Verdana</option>
+                  <option value="Courier New">Courier New</option>
+                </optgroup>
+                <optgroup label="Google Fonts">
+                  <option value="Inter" data-google-font="1">Inter</option>
+                  <option value="Roboto" data-google-font="1">Roboto</option>
+                  <option value="Open Sans" data-google-font="1">Open Sans</option>
+                  <option value="Lato" data-google-font="1">Lato</option>
+                  <option value="Montserrat" data-google-font="1">Montserrat</option>
+                  <option value="Poppins" data-google-font="1">Poppins</option>
+                  <option value="DM Sans" data-google-font="1">DM Sans</option>
+                  <option value="Manrope" data-google-font="1">Manrope</option>
+                  <option value="Plus Jakarta Sans" data-google-font="1">Plus Jakarta Sans</option>
+                  <option value="Space Grotesk" data-google-font="1">Space Grotesk</option>
+                  <option value="IBM Plex Sans" data-google-font="1">IBM Plex Sans</option>
+                  <option value="Nunito Sans" data-google-font="1">Nunito Sans</option>
+                  <option value="Work Sans" data-google-font="1">Work Sans</option>
+                  <option value="Source Sans 3" data-google-font="1">Source Sans 3</option>
+                  <option value="Merriweather" data-google-font="1">Merriweather</option>
+                  <option value="Playfair Display" data-google-font="1">Playfair Display</option>
+                  <option value="Libre Baskerville" data-google-font="1">Libre Baskerville</option>
+                  <option value="Roboto Mono" data-google-font="1">Roboto Mono</option>
+                  <option value="Space Mono" data-google-font="1">Space Mono</option>
+                </optgroup>
+                <option value="__custom__">Custom Google Font…</option>
+              </select>
+              <div id="customFontControls" class="conditional-controls hidden">
+                <label class="field-label" for="customFontInput">Google Font family name</label>
+                <div class="inline-field-action">
+                  <input id="customFontInput" class="field" type="text" placeholder="e.g. Archivo Black">
+                  <button id="applyCustomFontBtn" class="button secondary" type="button">Apply</button>
+                </div>
+              </div>
+
+              <div class="field-grid two">
+                <div>
+                  <label class="field-label" for="fontSizeInput">Size</label>
+                  <div class="unit-field"><input id="fontSizeInput" class="field" type="number" step="1" min="0"><span>px</span></div>
+                </div>
+                <div>
+                  <label class="field-label" for="fontWeightInput">Weight</label>
+                  <select id="fontWeightInput" class="field">
+                    <option value="">Auto</option>
+                    <option value="300">Light</option>
+                    <option value="400">Regular</option>
+                    <option value="500">Medium</option>
+                    <option value="600">Semi-bold</option>
+                    <option value="700">Bold</option>
+                    <option value="800">Extra-bold</option>
+                    <option value="900">Black</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="field-grid two">
+                <div>
+                  <label class="field-label" for="lineHeightInput">Line height</label>
+                  <input id="lineHeightInput" class="field" type="text" placeholder="normal / 1.5 / 32px">
+                </div>
+                <div>
+                  <label class="field-label" for="letterSpacingInput">Letter spacing</label>
+                  <input id="letterSpacingInput" class="field" type="text" placeholder="normal / -0.02em">
+                </div>
+              </div>
+
+              <label class="field-label">Text color</label>
+              <div class="color-field">
+                <input id="textColorPicker" type="color" value="#111111">
+                <input id="textColorInput" class="field" type="text" placeholder="#111111">
+              </div>
+
+              <label class="field-label" for="textAlignInput">Alignment</label>
+              <div class="segmented full" id="textAlignInput">
+                <button type="button" data-align="left">Left</button>
+                <button type="button" data-align="center">Center</button>
+                <button type="button" data-align="right">Right</button>
+                <button type="button" data-align="justify">Justify</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <button class="section-toggle" type="button" data-toggle="fillControls">
+              <span>Fill &amp; Border</span><span>⌃</span>
+            </button>
+            <div class="section-body" id="fillControls">
+              <label class="field-label">Background</label>
+              <div class="color-field">
+                <input id="backgroundColorPicker" type="color" value="#ffffff">
+                <input id="backgroundColorInput" class="field" type="text" placeholder="transparent or #ffffff">
+              </div>
+              <div class="field-grid two">
+                <div>
+                  <label class="field-label" for="borderRadiusInput">Radius</label>
+                  <div class="unit-field"><input id="borderRadiusInput" class="field" type="number" min="0"><span>px</span></div>
+                </div>
+                <div>
+                  <label class="field-label" for="opacityInput">Opacity</label>
+                  <input id="opacityInput" class="field" type="number" min="0" max="1" step="0.05">
+                </div>
+              </div>
+              <div class="field-grid three compact-grid">
+                <div>
+                  <label class="field-label" for="borderWidthInput">Border</label>
+                  <div class="unit-field"><input id="borderWidthInput" class="field" type="number" min="0"><span>px</span></div>
+                </div>
+                <div>
+                  <label class="field-label" for="borderStyleInput">Style</label>
+                  <select id="borderStyleInput" class="field">
+                    <option value="none">None</option>
+                    <option value="solid">Solid</option>
+                    <option value="dashed">Dashed</option>
+                    <option value="dotted">Dotted</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="field-label" for="borderColorInput">Color</label>
+                  <input id="borderColorInput" class="field" type="color" value="#111111">
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <button class="section-toggle" type="button" data-toggle="layoutControls">
+              <span>Size &amp; Spacing</span><span>⌃</span>
+            </button>
+            <div class="section-body" id="layoutControls">
+              <div class="field-grid two">
+                <div>
+                  <label class="field-label" for="widthInput">Width</label>
+                  <input id="widthInput" class="field" type="text" placeholder="auto / 320px / 100%">
+                </div>
+                <div>
+                  <label class="field-label" for="heightInput">Height</label>
+                  <input id="heightInput" class="field" type="text" placeholder="auto / 200px">
+                </div>
+              </div>
+              <div class="field-grid two">
+                <div>
+                  <label class="field-label" for="paddingInput">Padding</label>
+                  <input id="paddingInput" class="field" type="text" placeholder="16px or 8px 16px">
+                </div>
+                <div>
+                  <label class="field-label" for="marginInput">Margin</label>
+                  <input id="marginInput" class="field" type="text" placeholder="0 auto">
+                </div>
+              </div>
+              <label class="field-label" for="displayInput">Display</label>
+              <select id="displayInput" class="field">
+                <option value="">Auto</option>
+                <option value="block">Block</option>
+                <option value="inline">Inline</option>
+                <option value="inline-block">Inline block</option>
+                <option value="flex">Flex</option>
+                <option value="grid">Grid</option>
+                <option value="none">Hidden</option>
+              </select>
+            </div>
+          </section>
+
+          <section class="control-section compact-actions">
+            <div class="action-row">
+              <button class="button secondary grow" id="duplicateElementBtn" type="button">Duplicate</button>
+              <button class="button danger grow" id="deleteElementBtn" type="button">Delete</button>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <button class="panel-reopen panel-reopen-left" id="workspaceReopenBtn" type="button" aria-label="Show workspace">☰ <span>Workspace</span></button>
+  <button class="panel-reopen panel-reopen-right" id="inspectorReopenBtn" type="button" aria-label="Show inspector">Inspector</button>
+
+  <div class="preview-mode-bar hidden" id="previewModeBar">
+    <div class="preview-mode-identity">
+      <span class="safe-pill inverse">PREVIEW</span>
+      <strong id="previewModePageName">Page preview</strong>
+      <span>Interactive mode</span>
+    </div>
+    <button class="button primary" id="previewExitBtn" type="button">Exit preview</button>
+  </div>
+
+  <div class="drawer-backdrop hidden" id="drawerBackdrop"></div>
+
+  <section class="code-drawer" id="codeDrawer" aria-hidden="true">
+    <div class="code-drawer-head">
+      <div>
+        <div class="eyebrow">Source</div>
+        <h2 id="codeDrawerTitle">HTML</h2>
+      </div>
+      <div class="code-actions">
+        <span class="code-status" id="codeStatus">In sync</span>
+        <button class="button secondary" id="formatCodeBtn" type="button">Format</button>
+        <button class="button secondary" id="applyCodeBtn" type="button">Apply changes</button>
+        <button class="icon-btn" id="closeCodeBtn" type="button">×</button>
+      </div>
+    </div>
+    <textarea id="codeEditor" class="code-editor" spellcheck="false" aria-label="HTML source code"></textarea>
+  </section>
+
+  <div class="modal-backdrop hidden" id="pasteModal">
+    <div class="modal-card large">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">Import</div>
+          <h2>Paste HTML</h2>
+        </div>
+        <button class="icon-btn modal-close" data-close-modal="pasteModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field-label" for="pastePageName">Page name</label>
+        <input id="pastePageName" class="field" type="text" value="index.html">
+        <label class="field-label" for="pasteHtmlInput">HTML</label>
+        <textarea id="pasteHtmlInput" class="field paste-area" rows="18" placeholder="<!DOCTYPE html>…"></textarea>
+      </div>
+      <div class="modal-foot">
+        <button class="button secondary modal-close" data-close-modal="pasteModal" type="button">Cancel</button>
+        <button class="button primary" id="importPasteBtn" data-action="import-pasted-html" type="button">Import page</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="projectsModal">
+    <div class="modal-card large projects-card">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">Google Drive</div>
+          <h2>Projects</h2>
+        </div>
+        <button class="icon-btn modal-close" id="projectsCloseBtn" data-close-modal="projectsModal" type="button">×</button>
+      </div>
+      <div class="modal-body projects-body">
+        <section class="project-current-card">
+          <div class="project-current-copy">
+            <div class="eyebrow">Current workspace</div>
+            <strong id="projectModalCurrentName">Untitled Project</strong>
+            <span id="projectModalCurrentStatus">Not saved to Google Drive</span>
+          </div>
+          <div class="project-current-actions">
+            <button class="button secondary" id="newProjectBtn" type="button">New project</button>
+            <button class="button secondary" id="saveAsProjectBtn" type="button">Save as…</button>
+            <button class="button primary" id="projectModalSaveBtn" type="button">Save</button>
+          </div>
+        </section>
+
+        <section class="project-save-as hidden" id="projectSaveAsPanel">
+          <label class="field-label" for="projectNameInput">Project name</label>
+          <div class="project-name-row">
+            <input id="projectNameInput" class="field" type="text" maxlength="120" placeholder="My HTML project" autocomplete="off">
+            <button class="button primary" id="confirmSaveAsProjectBtn" type="button">Save to Drive</button>
+            <button class="button secondary" id="cancelSaveAsProjectBtn" type="button">Cancel</button>
+          </div>
+          <div class="field-help">A project folder containing a manifest and individual HTML page files will be created in Google Drive.</div>
+        </section>
+
+        <section class="project-assets-card">
+          <div class="project-assets-copy">
+            <div class="eyebrow">Project assets</div>
+            <strong>Archive remote images</strong>
+            <span>When saving, download HTTP/HTTPS image URLs into this project's private Drive <code>assets/images</code> folder. Original HTML URLs stay unchanged.</span>
+          </div>
+          <label class="switch-row project-image-archive-toggle">
+            <input id="archiveProjectImagesInput" type="checkbox" checked>
+            <span>Save remote images to Drive</span>
+          </label>
+          <div class="project-asset-status" id="projectAssetStatus">No archived image assets yet.</div>
+        </section>
+
+        <div class="projects-list-head">
+          <div><div class="eyebrow">Saved projects</div><h3>Your Drive projects</h3></div>
+          <button class="button ghost" id="refreshProjectsBtn" type="button">Refresh</button>
+        </div>
+        <div class="projects-loading hidden" id="projectsLoading">Loading projects…</div>
+        <div class="projects-list" id="projectsList"></div>
+        <div class="project-storage-note">
+          <span>Projects are stored under <strong>My Drive / UnScriptly HTML Studio / Projects</strong>.</span>
+          <a id="projectStorageLink" href="#" target="_blank" rel="noopener" class="text-link hidden">Open folder in Drive ↗</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="exportModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">Export</div>
+          <h2>Take your HTML with you</h2>
+        </div>
+        <button class="icon-btn modal-close" data-close-modal="exportModal" type="button">×</button>
+      </div>
+      <div class="modal-body export-options">
+        <button class="export-option" id="exportCurrentBtn" type="button">
+          <span class="export-icon">⇩</span>
+          <span><strong>Current page</strong><small>Download the active page as an .html file.</small></span>
+        </button>
+        <button class="export-option" id="exportAllBtn" type="button">
+          <span class="export-icon">▦</span>
+          <span><strong>All pages</strong><small>Package every page in the workspace into a ZIP.</small></span>
+        </button>
+        <button class="export-option" id="exportPngCurrentBtn" type="button">
+          <span class="export-icon">▧</span>
+          <span><strong>Current page as PNG</strong><small>Render the active page as a full-page PNG image.</small></span>
+        </button>
+        <button class="export-option" id="exportPngAllBtn" type="button">
+          <span class="export-icon">▦</span>
+          <span><strong>All pages as PNG</strong><small>Render every loaded page and package the PNG files into a ZIP.</small></span>
+        </button>
+        <div class="export-group-label">Review exports</div>
+        <button class="export-option" id="exportWireframeCurrentBtn" type="button">
+          <span class="export-icon">▤</span>
+          <span><strong>Current wireframe HTML</strong><small>Download the active page as a structural skeleton wireframe with placeholder content.</small></span>
+        </button>
+        <button class="export-option" id="exportWireframePngBtn" type="button">
+          <span class="export-icon">▧</span>
+          <span><strong>Current wireframe PNG</strong><small>Render the structural skeleton wireframe as a full-page PNG.</small></span>
+        </button>
+        <button class="export-option" id="exportWireframeAllBtn" type="button">
+          <span class="export-icon">▦</span>
+          <span><strong>All wireframes</strong><small>Package every loaded page as wireframe HTML in a ZIP.</small></span>
+        </button>
+        <button class="export-option" id="exportCompareWidgetBtn" type="button">
+          <span class="export-icon">↔</span>
+          <span><strong>Wireframe → Hi-Fi widget</strong><small>Export an interactive before/after comparison, with optional editor notes.</small></span>
+        </button>
+        <div class="export-group-label">Source</div>
+        <button class="export-option" id="exportCopyBtn" type="button">
+          <span class="export-icon">⧉</span>
+          <span><strong>Copy HTML</strong><small>Copy the active page source to your clipboard.</small></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="settingsModal">
+    <div class="modal-card large settings-card">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">Settings</div>
+          <h2>Global styles &amp; editor settings</h2>
+        </div>
+        <button class="icon-btn modal-close" id="settingsCloseBtn" data-close-modal="settingsModal" type="button">×</button>
+      </div>
+      <div class="modal-body settings-body">
+        <div class="settings-intro">
+          <div>
+            <strong>Apply design changes in bulk</strong>
+            <p>Global styles are exported with your HTML as a small override stylesheet. Only enabled settings are changed.</p>
+          </div>
+          <div>
+            <label class="field-label" for="globalScopeInput">Scope</label>
+            <select id="globalScopeInput" class="field">
+              <option value="current">Current page</option>
+              <option value="all">All loaded pages</option>
+            </select>
+          </div>
+        </div>
+
+        <section class="settings-section">
+          <div class="settings-section-head"><div><div class="eyebrow">Typography</div><h3>Fonts &amp; type rhythm</h3></div></div>
+          <div class="settings-grid two-col">
+            <div><label class="field-label" for="globalBodyFontInput">Base font</label><select id="globalBodyFontInput" class="field global-font-select">
+              <option value="__keep__">Keep current</option><option>Inter</option><option>Roboto</option><option>Open Sans</option><option>Lato</option><option>Montserrat</option><option>Poppins</option><option>DM Sans</option><option>Manrope</option><option>Plus Jakarta Sans</option><option>Space Grotesk</option><option>IBM Plex Sans</option><option>Nunito Sans</option><option>Work Sans</option><option>Source Sans 3</option><option>Merriweather</option><option>Playfair Display</option><option>Libre Baskerville</option><option>Arial</option><option>Georgia</option><option>Times New Roman</option><option>Verdana</option><option>Courier New</option>
+            </select></div>
+            <div><label class="field-label" for="globalHeadingFontInput">Heading font</label><select id="globalHeadingFontInput" class="field global-font-select">
+              <option value="__keep__">Keep current</option><option>Inter</option><option>Roboto</option><option>Open Sans</option><option>Lato</option><option>Montserrat</option><option>Poppins</option><option>DM Sans</option><option>Manrope</option><option>Plus Jakarta Sans</option><option>Space Grotesk</option><option>IBM Plex Sans</option><option>Nunito Sans</option><option>Work Sans</option><option>Source Sans 3</option><option>Merriweather</option><option>Playfair Display</option><option>Libre Baskerville</option><option>Arial</option><option>Georgia</option><option>Times New Roman</option><option>Verdana</option><option>Courier New</option>
+            </select></div>
+            <div><label class="field-label" for="globalFontSizeInput">Base size <span class="label-muted">px · blank keeps current</span></label><input id="globalFontSizeInput" class="field" type="number" min="8" max="48" placeholder="Unchanged"></div>
+            <div><label class="field-label" for="globalLineHeightInput">Line height</label><input id="globalLineHeightInput" class="field" type="text" placeholder="Unchanged · e.g. 1.6"></div>
+            <div><label class="field-label" for="globalHeadingWeightInput">Heading weight</label><select id="globalHeadingWeightInput" class="field"><option value="__keep__">Keep current</option><option value="400">400</option><option value="500">500</option><option value="600">600</option><option value="700">700</option><option value="800">800</option><option value="900">900</option></select></div>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-head"><div><div class="eyebrow">Color scheme</div><h3>Page &amp; brand colors</h3></div></div>
+          <div class="color-setting-grid">
+            <label class="color-setting"><input id="globalUseBackground" type="checkbox"><span>Page background</span><input id="globalBackgroundColor" type="color" value="#ffffff"></label>
+            <label class="color-setting"><input id="globalUseText" type="checkbox"><span>Body text</span><input id="globalTextColor" type="color" value="#222222"></label>
+            <label class="color-setting"><input id="globalUseHeading" type="checkbox"><span>Headings</span><input id="globalHeadingColor" type="color" value="#111111"></label>
+            <label class="color-setting"><input id="globalUseAccent" type="checkbox"><span>Accent / primary</span><input id="globalAccentColor" type="color" value="#111111"></label>
+            <label class="color-setting"><input id="globalUseSurface" type="checkbox"><span>Cards / panels</span><input id="globalSurfaceColor" type="color" value="#f7f7f5"></label>
+            <label class="color-setting"><input id="globalUseBorder" type="checkbox"><span>Borders</span><input id="globalBorderColor" type="color" value="#dddddd"></label>
+          </div>
+          <div class="settings-inline-checks">
+            <label class="check-row"><input id="globalStyleLinks" type="checkbox" checked> Use accent for links</label>
+            <label class="check-row"><input id="globalStyleButtons" type="checkbox"> Use accent for buttons</label>
+            <label class="mini-color-field">Button text <input id="globalButtonTextColor" type="color" value="#ffffff"></label>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-head"><div><div class="eyebrow">Element details</div><h3>Shape &amp; depth</h3></div></div>
+          <div class="settings-grid four-col">
+            <div><label class="field-label" for="globalButtonRadiusInput">Button radius</label><input id="globalButtonRadiusInput" class="field" type="number" min="0" max="100" placeholder="Unchanged"></div>
+            <div><label class="field-label" for="globalCardRadiusInput">Card radius</label><input id="globalCardRadiusInput" class="field" type="number" min="0" max="100" placeholder="Unchanged"></div>
+            <div><label class="field-label" for="globalMediaRadiusInput">Media radius</label><input id="globalMediaRadiusInput" class="field" type="number" min="0" max="100" placeholder="Unchanged"></div>
+            <div><label class="field-label" for="globalControlRadiusInput">Input radius</label><input id="globalControlRadiusInput" class="field" type="number" min="0" max="100" placeholder="Unchanged"></div>
+            <div><label class="field-label" for="globalShadowInput">Card shadow</label><select id="globalShadowInput" class="field"><option value="keep">Keep current</option><option value="none">None</option><option value="soft">Soft</option><option value="medium">Medium</option></select></div>
+          </div>
+        </section>
+
+        <section class="settings-section interface-settings">
+          <div><div class="eyebrow">Editor</div><h3>Interface</h3></div>
+          <label class="check-row"><input id="showCanvasGridInput" type="checkbox" checked> Show canvas grid</label>
+        </section>
+      </div>
+      <div class="modal-foot settings-actions">
+        <button class="button secondary" id="resetGlobalStylesBtn" type="button">Remove global overrides</button>
+        <button class="button primary" id="applyGlobalStylesBtn" type="button">Apply global styles</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="pngModal">
+    <div class="modal-card png-card">
+      <div class="modal-head">
+        <div><div class="eyebrow">Image export</div><h2>Export page as PNG</h2></div>
+        <button class="icon-btn modal-close" data-close-modal="pngModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-grid two">
+          <div><label class="field-label" for="pngScopeInput">Pages</label><select id="pngScopeInput" class="field"><option value="current">Current page</option><option value="all">All loaded pages</option></select></div>
+          <div><label class="field-label" for="pngWidthInput">Render width</label><select id="pngWidthInput" class="field"><option value="1440">Desktop · 1440px</option><option value="1024">Laptop · 1024px</option><option value="768">Tablet · 768px</option><option value="390">Mobile · 390px</option><option value="current">Current canvas width</option></select></div>
+          <div><label class="field-label" for="pngScaleInput">Quality</label><select id="pngScaleInput" class="field"><option value="1">Standard · 1×</option><option value="1.5">High · 1.5×</option><option value="2">Retina · 2×</option></select></div>
+        </div>
+        <div class="png-note"><strong>Full-page capture</strong><span>The page is rendered from top to bottom. Very long pages are automatically scaled to stay within browser image limits. Embedded media exports most reliably; cross-origin assets may be omitted if the source server blocks canvas access.</span></div>
+        <div class="png-progress" id="pngProgress" aria-live="polite"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="button secondary modal-close" data-close-modal="pngModal" type="button">Cancel</button>
+        <button class="button primary" id="pngExportBtn" type="button">Export PNG</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="noteEditorModal">
+    <div class="modal-card note-editor-card">
+      <div class="modal-head">
+        <div><div class="eyebrow">Editor note</div><h2 id="noteEditorTitle">Add editor note</h2></div>
+        <button class="icon-btn modal-close" id="noteEditorCloseBtn" type="button">×</button>
+      </div>
+      <div class="modal-body note-editor-body">
+        <div class="note-anchor-summary"><span>Attached to</span><strong id="noteAnchorLabel">Selected element</strong></div>
+        <label class="field-label" for="noteTitleInput">Title</label>
+        <input id="noteTitleInput" class="field" type="text" placeholder="e.g. Simplify this heading">
+        <label class="field-label" for="noteBodyInput">Note</label>
+        <textarea id="noteBodyInput" class="field textarea note-body-input" rows="6" placeholder="Add feedback, rationale, questions, or implementation guidance…"></textarea>
+        <label class="field-label" for="noteStatusInput">Status</label>
+        <select id="noteStatusInput" class="field"><option value="open">Open</option><option value="resolved">Resolved</option></select>
+      </div>
+      <div class="modal-foot note-editor-actions">
+        <button class="button ghost danger-text hidden" id="deleteNoteBtn" type="button">Delete</button>
+        <span class="modal-spacer"></span>
+        <button class="button secondary" id="cancelNoteBtn" type="button">Cancel</button>
+        <button class="button primary" id="saveNoteBtn" type="button">Save note</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="compareExportModal">
+    <div class="modal-card compare-export-card">
+      <div class="modal-head">
+        <div><div class="eyebrow">Review export</div><h2>Wireframe → Hi-Fi widget</h2></div>
+        <button class="icon-btn modal-close" id="compareExportCloseBtn" type="button">×</button>
+      </div>
+      <div class="modal-body compare-export-body">
+        <p class="compare-export-intro">Create a standalone interactive HTML review widget with a draggable before/after reveal. The original page is preserved as Hi-Fi and a true low-fidelity skeleton becomes the Wireframe view.</p>
+        <label class="field-label" for="compareScopeInput">Pages</label>
+        <select id="compareScopeInput" class="field"><option value="current">Current page</option><option value="all">All loaded pages (ZIP)</option></select>
+        <label class="switch-row compare-notes-toggle"><input id="compareIncludeNotesInput" type="checkbox" checked><span><strong>Include editor notes</strong><small>Export note pins that viewers can click to read feedback.</small></span></label>
+        <div class="compare-export-preview"><span>Wireframe</span><div class="compare-mini-track"><i></i></div><span>Hi-Fi</span></div>
+      </div>
+      <div class="modal-foot"><button class="button secondary" id="compareExportCancelBtn" type="button">Cancel</button><button class="button primary" id="compareExportConfirmBtn" type="button">Export widget</button></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="iconPickerModal">
+    <div class="modal-card icon-picker-card">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">Elements</div>
+          <h2>Material Symbols</h2>
+        </div>
+        <button class="icon-btn modal-close" data-close-modal="iconPickerModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <input id="iconSearchInput" class="field" type="search" placeholder="Search icons by name…" autocomplete="off">
+        <div class="icon-picker-grid" id="iconPickerGrid"></div>
+        <div class="field-help icon-picker-help">Choose an icon to insert it, or to replace the currently selected Material Symbol.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+
+  <?!= studioIncludeRequired_('StudioBoot'); ?>
+  <?!= studioIncludeRequired_('StudioLayerBridge'); ?>
+  <?!= studioIncludeRequired_('StudioReviewBridge'); ?>
+  <script>window.__HTML_STUDIO_PHASE = 'core';</script>
+  <?!= studioIncludeRequired_('StudioCore'); ?>
+  <script>window.__HTML_STUDIO_PHASE = 'plus';</script>
+  <?!= studioIncludeRequired_('StudioPlus'); ?>
+  <?!= studioIncludeOptional_('StudioReview', 'skeleton wireframe and editor notes'); ?>
+  <?!= studioIncludeOptional_('StudioProjects', 'drive projects'); ?>
+  <?!= studioIncludeOptional_('StudioWorkspace', 'workspace'); ?>
+  <?!= studioIncludeRequired_('StudioLayers'); ?>
+  <?!= studioIncludeOptional_('StudioElements', 'elements'); ?>
+  <?!= studioIncludeOptional_('StudioComponents', 'components library'); ?>
+  <?!= studioIncludeOptional_('StudioSocial', 'social and link bar'); ?>
+  <?!= studioIncludeOptional_('StudioMedia', 'media'); ?>
+  <?!= studioIncludeOptional_('StudioGallery', 'gallery and slideshow'); ?>
+  <?!= studioIncludeOptional_('StudioLinking', 'universal link URL controls'); ?>
+  <?!= studioIncludeOptional_('StudioNavigation', 'button navigation mapping'); ?>
+  <?!= studioIncludeOptional_('StudioTypography', 'typography'); ?>
+  <?!= studioIncludeOptional_('StudioChrome', 'chrome'); ?>
+  <?!= studioIncludeOptional_('StudioGlobal', 'global styles'); ?>
+  <?!= studioIncludeOptional_('StudioPng', 'png export'); ?>
+  <?!= studioIncludeOptional_('StudioReviewExport', 'skeleton wireframe and comparison export'); ?>
+  <?!= studioIncludeOptional_('StudioElementExport', 'element and group export'); ?>
+
+  <script>
+  (function () {
+    window.setTimeout(function () {
+      var badge = document.getElementById('buildStatusBadge');
+      if (!badge) return;
+      var ready = document.documentElement.getAttribute('data-html-studio-plus') === 'ready';
+      var layersState = document.documentElement.getAttribute('data-html-studio-layers') || 'missing';
+      var layerBridgeState = document.documentElement.getAttribute('data-html-studio-layer-bridge') || 'missing';
+      var reviewBridgeState = document.documentElement.getAttribute('data-html-studio-review-bridge') || 'missing';
+      var reviewState = document.documentElement.getAttribute('data-html-studio-review') || 'missing';
+      var componentsState = document.documentElement.getAttribute('data-html-studio-components') || 'missing';
+      var galleryState = document.documentElement.getAttribute('data-html-studio-gallery') || 'missing';
+      var mediaState = document.documentElement.getAttribute('data-html-studio-media') || 'missing';
+      var linkingState = document.documentElement.getAttribute('data-html-studio-linking') || 'missing';
+      var socialState = document.documentElement.getAttribute('data-html-studio-social') || 'missing';
+      var elementExportState = document.documentElement.getAttribute('data-html-studio-element-export') || 'missing';
+      var errors = window.__HTML_STUDIO_BOOT_ERRORS || [];
+      if (ready && (layersState !== 'ready' || layerBridgeState !== 'ready') && !/ERROR/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.11.0 · LAYER SYNC NOT READY';
+        badge.className = 'build-badge warn';
+        badge.title = layerBridgeState !== 'ready' ? 'The layer preview bridge did not initialize.' : 'The Layers module did not initialize.';
+        var layersEmpty = document.getElementById('layersEmptyState');
+        if (layersEmpty) layersEmpty.textContent = 'Layers module did not initialize. Verify StudioLayers.html is installed, then redeploy.';
+      }
+      if (ready && (reviewBridgeState !== 'ready' || reviewState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.11.0 · REVIEW TOOLS NOT READY';
+        badge.className = 'build-badge warn';
+        badge.title = reviewBridgeState !== 'ready' ? 'The wireframe/notes preview bridge did not initialize.' : 'The wireframe/notes module did not initialize.';
+      }
+      if (ready && (componentsState !== 'ready' || galleryState !== 'ready' || mediaState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.11.0 · LIBRARIES NOT READY';
+        badge.className = 'build-badge warn';
+        badge.title = componentsState !== 'ready' ? 'The Components library did not initialize.' : (mediaState !== 'ready' ? 'The Google Drive Media Library did not initialize.' : 'Gallery / Slideshow did not initialize.');
+      }
+      if (ready && (linkingState !== 'ready' || socialState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.11.0 · LINK TOOLS NOT READY';
+        badge.className = 'build-badge warn';
+        badge.title = linkingState !== 'ready' ? 'Universal Link URL controls did not initialize.' : 'Social / Link Bar did not initialize.';
+      }
+      if (ready && elementExportState !== 'ready' && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.11.0 · ELEMENT EXPORT NOT READY';
+        badge.className = 'build-badge warn';
+        badge.title = 'Element / Group export did not initialize.';
+      }
+      if (!ready && !/ERROR/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.11.0 · CORE NOT READY';
+        badge.className = 'build-badge error';
+        badge.title = errors.length ? errors[errors.length - 1].message : 'The v1 core did not pass its startup probe.';
+      }
+    }, 2200);
+  })();
+  </script>
+</body>
+</html>
