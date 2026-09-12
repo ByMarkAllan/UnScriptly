@@ -869,3 +869,32 @@ html.studio-note-pick-mode #previewFrame { cursor: crosshair; }
   .social-new-tab{grid-column:1/-1;}
 }
 </style>
+
+<!-- v8.12.0 · GitHub + private Drive media preview -->
+<style>
+.github-settings-section { display:grid; gap:14px; }
+.github-settings-head { align-items:flex-start; gap:16px; }
+.github-settings-head p { margin:5px 0 0; max-width:720px; color:var(--muted,#6f6f6a); font-size:12px; line-height:1.45; }
+.github-connection-badge { flex:0 0 auto; display:inline-flex; align-items:center; min-height:28px; padding:5px 10px; border:1px solid #d8d8d3; border-radius:999px; font-size:11px; font-weight:800; letter-spacing:.02em; white-space:nowrap; }
+.github-connection-badge.connected { background:#eef8f1; color:#176b37; border-color:#cde7d5; }
+.github-connection-badge.disconnected { background:#f6f6f3; color:#77776f; }
+.github-account-row, .github-result-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.github-connect-block, .github-repository-block { display:grid; gap:9px; padding:14px; border:1px solid #e1e1dc; border-radius:14px; background:#fbfbf9; }
+.github-connect-block.github-connected { background:#f7faf8; }
+.github-inline-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
+.github-source-sync { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.github-sync-card { display:grid; gap:8px; padding:14px; border:1px solid #e1e1dc; border-radius:14px; background:#fff; }
+.github-sync-card strong { display:block; margin-top:2px; }
+.github-operation-status.busy { color:#8a6712; }
+.github-operation-status.success { color:#176b37; }
+.github-operation-status.error { color:#a1261f; }
+.media-preview-loading { opacity:.55; filter:saturate(.35); }
+.media-preview-failed { object-fit:contain!important; padding:14px; background:#f2f2f0; }
+.media-github-btn { min-width:54px; }
+.media-github-btn:disabled { opacity:.4; cursor:not-allowed; }
+@media (max-width: 820px) {
+  .github-source-sync { grid-template-columns:1fr; }
+  .github-inline-row { grid-template-columns:1fr; }
+  .github-account-row, .github-result-row { align-items:flex-start; flex-direction:column; }
+}
+</style>

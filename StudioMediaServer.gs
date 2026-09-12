@@ -116,7 +116,7 @@ function htmlStudioSaveMediaUrl(request) {
       followRedirects: true,
       muteHttpExceptions: true,
       validateHttpsCertificates: true,
-      headers: { 'User-Agent': 'UnScriptly-HTML-Studio/8.11.0 Media Library' }
+      headers: { 'User-Agent': 'UnScriptly-HTML-Studio/8.12.0 Media Library' }
     });
   } catch (error) {
     throw new Error('The hosted media URL could not be downloaded: ' + String(error && error.message || error));
@@ -148,6 +148,45 @@ function htmlStudioSaveMediaUrl(request) {
   return htmlStudioMediaServerFileDto_(file, folder, kind);
 }
 
+
+
+/**
+ * Public RPC: return a temporary browser preview for a Drive Media Library image.
+ * The bytes are read from Drive on demand and are NOT persisted in UnScriptly.
+ * This exists because authenticated/private Drive URLs and thumbnails are not
+ * reliably embeddable inside Apps Script iframes on Safari/iPad.
+ */
+function htmlStudioGetMediaPreview(mediaId) {
+  var file = htmlStudioMediaServerGetFile_(mediaId);
+  var kind = htmlStudioMediaServerKind_(file.getMimeType(), file.getName(), '');
+  if (kind !== 'image') throw new Error('Drive preview is currently available for images only.');
+
+  var blob = file.getBlob();
+  var bytes = blob.getBytes();
+  var maxPreviewBytes = 8 * 1024 * 1024;
+  if (bytes.length > maxPreviewBytes) {
+    return {
+      id: file.getId(),
+      ok: false,
+      tooLarge: true,
+      name: file.getName(),
+      mimeType: file.getMimeType(),
+      size: bytes.length,
+      driveUrl: file.getUrl()
+    };
+  }
+
+  var mime = htmlStudioMediaServerNormalizeMime_(file.getMimeType(), file.getName(), 'image') || 'image/png';
+  return {
+    id: file.getId(),
+    ok: true,
+    name: file.getName(),
+    mimeType: mime,
+    size: bytes.length,
+    dataUrl: 'data:' + mime + ';base64,' + Utilities.base64Encode(bytes)
+  };
+}
+
 /** Public RPC: trash a Drive Media Library file. */
 function htmlStudioDeleteMedia(mediaId) {
   var file = htmlStudioMediaServerGetFile_(mediaId);
@@ -171,7 +210,7 @@ function htmlStudioMediaServerHealth() {
   return {
     ok: true,
     module: 'StudioMediaServer',
-    version: '8.11.0-media-server-hotfix-20260827',
+    version: '8.12.0-github-drive-media-preview-20260830',
     rootFolderId: root.getId(),
     rootFolderName: root.getName()
   };

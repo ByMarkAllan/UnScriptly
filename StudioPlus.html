@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var BUILD = '8.11.0-drive-media-library-20260827';
+  var BUILD = '8.12.0-github-drive-media-preview-20260830';
   var selection = null;
   var lastPreviewToken = '';
   var silentDepth = 0;
@@ -47,17 +47,17 @@
 
   function verifyServer() {
     if (!(window.google && google.script && google.script.run)) {
-      setBadge('ready', 'v8.11.0 · CORE READY', 'The immutable v1 core is running. Server handshake unavailable outside Apps Script.');
+      setBadge('ready', 'v8.12.0 · CORE READY', 'The immutable v1 core is running. Server handshake unavailable outside Apps Script.');
       return;
     }
     google.script.run
       .withSuccessHandler(function (info) {
         var server = info && info.build ? String(info.build) : '';
-        if (server === BUILD) setBadge('ready', 'v8.11.0 · READY', 'Immutable v1 core + v8.11 Drive Media Library + element export/link/social/component extensions + matching Code.gs are running.');
-        else setBadge('warn', 'v8.11.0 · SERVER MISMATCH', 'Client ' + BUILD + ' / server ' + (server || 'unknown'));
+        if (server === BUILD) setBadge('ready', 'v8.12.0 · READY', 'Immutable v1 core + v8.12 Drive Media + GitHub + element export/link/social/component extensions + matching Code.gs are running.');
+        else setBadge('warn', 'v8.12.0 · SERVER MISMATCH', 'Client ' + BUILD + ' / server ' + (server || 'unknown'));
       })
       .withFailureHandler(function (error) {
-        setBadge('warn', 'v8.11.0 · SERVER CHECK FAILED', String(error && error.message || error || 'Build check failed'));
+        setBadge('warn', 'v8.12.0 · SERVER CHECK FAILED', String(error && error.message || error || 'Build check failed'));
       })
       .htmlStudioGetBuildInfo();
   }
@@ -331,13 +331,13 @@
   function init() {
     var ok = probeV1Core();
     if (!ok) {
-      setBadge('error', 'v8.11.0 · V1 CORE PROBE FAILED', 'The unchanged v1 core script loaded but did not bind its known-good controls.');
+      setBadge('error', 'v8.12.0 · V1 CORE PROBE FAILED', 'The unchanged v1 core script loaded but did not bind its known-good controls.');
       return;
     }
     document.documentElement.setAttribute('data-html-studio-plus', 'ready');
     installTxtImport();
     capturePreviewMessages();
-    setBadge('ready', 'v8.11.0 · CORE READY', 'The unchanged v1 editor core is running; checking the Apps Script server.');
+    setBadge('ready', 'v8.12.0 · CORE READY', 'The unchanged v1 editor core is running; checking the Apps Script server.');
     verifyServer();
   }
 
@@ -368,6 +368,7 @@
         reviewExport: document.documentElement.getAttribute('data-html-studio-review-export') || 'unknown',
         elements: document.documentElement.getAttribute('data-html-studio-elements') || 'unknown',
         media: document.documentElement.getAttribute('data-html-studio-media') || 'unknown',
+        github: document.documentElement.getAttribute('data-html-studio-github') || 'unknown',
         gallery: document.documentElement.getAttribute('data-html-studio-gallery') || 'unknown',
         navigation: document.documentElement.getAttribute('data-html-studio-navigation') || 'unknown',
         linking: document.documentElement.getAttribute('data-html-studio-linking') || 'unknown',
@@ -385,7 +386,7 @@
   try { init(); }
   catch (error) {
     console.error('[HTML Studio Plus] initialization failed:', error);
-    setBadge('error', 'v8.11.0 · PLUS ERROR', String(error && error.message || error));
+    setBadge('error', 'v8.12.0 · PLUS ERROR', String(error && error.message || error));
   }
 })();
 </script>

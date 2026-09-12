@@ -1,0 +1,349 @@
+<script>
+(() => {
+  'use strict';
+
+  const plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  let state = { connected: false, login: '', repository: '', branch: '', mediaPath: 'assets/media', private: false };
+  let repos = [];
+  let busy = false;
+
+  function $(id) { return document.getElementById(id); }
+  function setStatus(value) { document.documentElement.setAttribute('data-html-studio-github', value); }
+
+  function rpc(method, payload) {
+    if (!(window.google && google.script && google.script.run)) {
+      return Promise.reject(new Error('GitHub integration requires the deployed Google Apps Script web app.'));
+    }
+
+    return new Promise((resolve, reject) => {
+      const runner = google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(error => reject(
+          error instanceof Error
+            ? error
+            : new Error(String(error && error.message || error || 'GitHub operation failed.'))
+        ));
+
+      /*
+       * google.script.run is an Apps Script host proxy, not a normal JavaScript
+       * object. Dynamic bracket calls such as runner[method](payload) are not
+       * reliably supported (notably in Safari/iPad), and can resolve to
+       * undefined before the request ever reaches Apps Script.
+       *
+       * Keep every RPC as an explicit property call so the Apps Script bridge
+       * can bind the server function correctly.
+       */
+      switch (method) {
+        case 'htmlStudioGitHubStatus':
+          return runner.htmlStudioGitHubStatus();
+        case 'htmlStudioGitHubConnect':
+          return runner.htmlStudioGitHubConnect(payload || {});
+        case 'htmlStudioGitHubDisconnect':
+          return runner.htmlStudioGitHubDisconnect();
+        case 'htmlStudioGitHubListRepos':
+          return runner.htmlStudioGitHubListRepos();
+        case 'htmlStudioGitHubConfigure':
+          return runner.htmlStudioGitHubConfigure(payload || {});
+        case 'htmlStudioGitHubCommitHtml':
+          return runner.htmlStudioGitHubCommitHtml(payload || {});
+        case 'htmlStudioGitHubImportHtml':
+          return runner.htmlStudioGitHubImportHtml(payload || {});
+        case 'htmlStudioGitHubUploadDriveMedia':
+          return runner.htmlStudioGitHubUploadDriveMedia(payload || {});
+        default:
+          reject(new Error('Unsupported GitHub RPC method: ' + method));
+      }
+    });
+  }
+
+  function currentPageName() {
+    const node = $('currentPageLabel');
+    const name = node ? String(node.textContent || '').trim() : '';
+    return name || 'index.html';
+  }
+
+  function setBusy(value, message) {
+    busy = Boolean(value);
+    ['githubConnectBtn','githubDisconnectBtn','githubRefreshReposBtn','githubSaveConfigBtn','githubCommitBtn','githubImportBtn','githubRepoInput','githubRepoSelect','githubBranchInput','githubMediaPathInput','githubTokenInput','githubCommitPathInput','githubCommitMessageInput','githubImportPathInput'].forEach(id => {
+      const node = $(id);
+      if (node) node.disabled = busy;
+    });
+    if (message) setMessage(message, busy ? 'busy' : '');
+  }
+
+  function setMessage(message, type) {
+    const node = $('githubOperationStatus');
+    if (!node) return;
+    node.textContent = message || '';
+    node.className = 'field-help github-operation-status' + (type ? ' ' + type : '');
+  }
+
+  function dispatchStatus() {
+    try { document.dispatchEvent(new CustomEvent('htmlstudio:github-status', { detail: Object.assign({}, state) })); } catch (_) {}
+  }
+
+  function renderStatus() {
+    const badge = $('githubConnectionBadge');
+    const account = $('githubAccountSummary');
+    const connected = Boolean(state.connected);
+    if (badge) {
+      badge.textContent = connected ? 'Connected' : 'Not connected';
+      badge.className = 'github-connection-badge ' + (connected ? 'connected' : 'disconnected');
+    }
+    if (account) {
+      account.textContent = connected
+        ? ('@' + (state.login || 'GitHub user') + (state.repository ? ' · ' + state.repository + ' · ' + (state.branch || 'main') : ''))
+        : 'Connect a fine-grained personal access token. The token is stored server-side in Apps Script UserProperties.';
+    }
+    const connectBlock = $('githubConnectBlock');
+    const repoBlock = $('githubRepositoryBlock');
+    const syncBlock = $('githubSourceSyncBlock');
+    if (connectBlock) connectBlock.classList.toggle('github-connected', connected);
+    if (repoBlock) repoBlock.classList.toggle('hidden', !connected);
+    if (syncBlock) syncBlock.classList.toggle('hidden', !connected || !state.repository);
+    const disconnect = $('githubDisconnectBtn');
+    if (disconnect) disconnect.classList.toggle('hidden', !connected);
+
+    if ($('githubRepoInput')) $('githubRepoInput').value = state.repository || '';
+    if ($('githubBranchInput')) $('githubBranchInput').value = state.branch || 'main';
+    if ($('githubMediaPathInput')) $('githubMediaPathInput').value = state.mediaPath || 'assets/media';
+    if ($('githubCommitPathInput') && !$('githubCommitPathInput').value) $('githubCommitPathInput').value = currentPageName();
+    dispatchStatus();
+  }
+
+  function renderRepos() {
+    const select = $('githubRepoSelect');
+    if (!select) return;
+    const selected = state.repository || select.value || '';
+    select.innerHTML = '<option value="">Choose accessible repository…</option>';
+    repos.forEach(repo => {
+      const option = document.createElement('option');
+      option.value = repo.fullName;
+      option.textContent = repo.fullName + (repo.private ? ' · private' : ' · public') + (repo.canPush ? '' : ' · read only');
+      option.dataset.branch = repo.defaultBranch || 'main';
+      select.appendChild(option);
+    });
+    if (repos.some(repo => repo.fullName === selected)) select.value = selected;
+  }
+
+  async function loadStatus(silent) {
+    try {
+      const result = await rpc('htmlStudioGitHubStatus');
+      state = Object.assign({ connected: false, mediaPath: 'assets/media' }, result || {});
+      renderStatus();
+      if (state.connected) await loadRepos(true);
+      if (!silent) setMessage(state.connected ? 'GitHub connection loaded.' : 'GitHub is not connected.', state.connected ? 'success' : '');
+    } catch (error) {
+      console.error('[HTML Studio] GitHub status failed:', error);
+      setMessage(String(error && error.message || error || 'GitHub status failed.'), 'error');
+    }
+  }
+
+  async function connect() {
+    if (busy) return;
+    const tokenInput = $('githubTokenInput');
+    const token = tokenInput ? String(tokenInput.value || '').trim() : '';
+    if (!token) { plus.toast('Paste a GitHub personal access token first.', 'error'); return; }
+    setBusy(true, 'Connecting to GitHub…');
+    try {
+      state = Object.assign(state, await rpc('htmlStudioGitHubConnect', { token }));
+      if (tokenInput) tokenInput.value = '';
+      await loadRepos(true);
+      renderStatus();
+      setMessage('Connected to GitHub as @' + (state.login || 'user') + '.', 'success');
+      plus.toast('GitHub connected.');
+    } catch (error) {
+      setMessage(String(error && error.message || error || 'GitHub connection failed.'), 'error');
+      plus.toast('GitHub connection failed.', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function disconnect() {
+    if (busy || !state.connected) return;
+    if (!window.confirm('Disconnect GitHub from UnScriptly on this Apps Script account?')) return;
+    setBusy(true, 'Disconnecting GitHub…');
+    try {
+      await rpc('htmlStudioGitHubDisconnect');
+      state = { connected: false, login: '', repository: '', branch: '', mediaPath: 'assets/media', private: false };
+      repos = [];
+      renderRepos();
+      renderStatus();
+      setMessage('GitHub disconnected.', 'success');
+      plus.toast('GitHub disconnected.');
+    } catch (error) {
+      setMessage(String(error && error.message || error || 'Could not disconnect GitHub.'), 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function loadRepos(silent) {
+    if (!state.connected) return;
+    if (!silent) setMessage('Loading accessible repositories…', 'busy');
+    try {
+      repos = await rpc('htmlStudioGitHubListRepos') || [];
+      renderRepos();
+      if (!silent) setMessage(repos.length + ' accessible repositor' + (repos.length === 1 ? 'y' : 'ies') + ' loaded.', 'success');
+    } catch (error) {
+      console.error('[HTML Studio] GitHub repo list failed:', error);
+      repos = [];
+      renderRepos();
+      setMessage(String(error && error.message || error || 'Could not list repositories. You can enter owner/repository manually.'), 'error');
+    }
+  }
+
+  async function saveConfig() {
+    if (busy || !state.connected) return;
+    const manual = $('githubRepoInput') ? String($('githubRepoInput').value || '').trim() : '';
+    const selected = $('githubRepoSelect') ? String($('githubRepoSelect').value || '').trim() : '';
+    const repository = manual || selected;
+    const branch = $('githubBranchInput') ? String($('githubBranchInput').value || '').trim() : '';
+    const mediaPath = $('githubMediaPathInput') ? String($('githubMediaPathInput').value || '').trim() : 'assets/media';
+    if (!repository) { plus.toast('Choose or enter a GitHub repository.', 'error'); return; }
+
+    setBusy(true, 'Saving GitHub repository settings…');
+    try {
+      state = Object.assign(state, await rpc('htmlStudioGitHubConfigure', { repository, branch, mediaPath }));
+      renderStatus();
+      if ($('githubCommitPathInput')) $('githubCommitPathInput').value = currentPageName();
+      setMessage('GitHub repository configured: ' + state.repository + ' · ' + state.branch, 'success');
+      plus.toast('GitHub repository configured.');
+    } catch (error) {
+      setMessage(String(error && error.message || error || 'Could not configure GitHub repository.'), 'error');
+      plus.toast('GitHub repository configuration failed.', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function commitCurrentHtml() {
+    if (busy || !state.repository) return;
+    const html = plus.readSource();
+    if (!html) { plus.toast('Open a page before committing HTML.', 'error'); return; }
+    const path = $('githubCommitPathInput') ? String($('githubCommitPathInput').value || '').trim() : currentPageName();
+    const message = $('githubCommitMessageInput') ? String($('githubCommitMessageInput').value || '').trim() : '';
+    setBusy(true, 'Committing current HTML to GitHub…');
+    try {
+      const result = await rpc('htmlStudioGitHubCommitHtml', { path, html, message });
+      showResultLink(result.htmlUrl || result.rawUrl || '', result.created ? 'HTML created in GitHub.' : 'HTML committed to GitHub.');
+      plus.toast(result.created ? 'GitHub file created.' : 'GitHub commit complete.');
+    } catch (error) {
+      setMessage(String(error && error.message || error || 'GitHub commit failed.'), 'error');
+      plus.toast('GitHub commit failed.', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function importHtml() {
+    if (busy || !state.repository) return;
+    const path = $('githubImportPathInput') ? String($('githubImportPathInput').value || '').trim() : '';
+    if (!path) { plus.toast('Enter the HTML file path in the repository.', 'error'); return; }
+    setBusy(true, 'Importing HTML from GitHub…');
+    try {
+      const result = await rpc('htmlStudioGitHubImportHtml', { path });
+      if (!$('pastePageName') || !$('pasteHtmlInput') || !$('importPasteBtn')) throw new Error('The HTML importer is unavailable.');
+      $('pastePageName').value = result.name || 'index.html';
+      $('pasteHtmlInput').value = result.html || '';
+      $('importPasteBtn').click();
+      showResultLink(result.htmlUrl || '', 'Imported ' + (result.name || path) + ' from GitHub.');
+      plus.toast('GitHub HTML imported.');
+    } catch (error) {
+      setMessage(String(error && error.message || error || 'GitHub import failed.'), 'error');
+      plus.toast('GitHub HTML import failed.', 'error');
+    } finally { setBusy(false); }
+  }
+
+  function showResultLink(url, message) {
+    const node = $('githubResultLink');
+    if (node) {
+      if (url) { node.href = url; node.textContent = 'Open in GitHub ↗'; node.classList.remove('hidden'); }
+      else { node.classList.add('hidden'); node.removeAttribute('href'); }
+    }
+    setMessage(message || '', 'success');
+  }
+
+  function copyText(value) {
+    const text = String(value || '');
+    if (!text) return Promise.resolve(false);
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).then(() => true, () => false);
+    const area = document.createElement('textarea');
+    area.value = text; area.style.position = 'fixed'; area.style.opacity = '0';
+    document.body.appendChild(area); area.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (_) {}
+    area.remove(); return Promise.resolve(ok);
+  }
+
+  async function publishMediaAsset(asset) {
+    if (!state.connected || !state.repository) {
+      plus.toast('Connect and configure GitHub in Settings first.', 'error');
+      throw new Error('GitHub repository is not configured.');
+    }
+    if (!asset || !asset.id) throw new Error('Drive media file is unavailable.');
+    const basePath = String(state.mediaPath || 'assets/media').replace(/^\/+|\/+$/g, '');
+    const suggested = (basePath ? basePath + '/' : '') + String(asset.name || 'media').replace(/[\\/:*?"<>|]+/g, '-');
+    const path = window.prompt('GitHub media path:', suggested);
+    if (path === null) return null;
+    const cleaned = String(path || '').trim();
+    if (!cleaned) throw new Error('GitHub media path is required.');
+
+    setMessage('Uploading ' + (asset.name || 'media') + ' to GitHub…', 'busy');
+    const result = await rpc('htmlStudioGitHubUploadDriveMedia', { mediaId: asset.id, path: cleaned });
+    const url = result.publicUrl || result.rawUrl || result.htmlUrl || '';
+    if (url) await copyText(url);
+    if (result.private) {
+      setMessage('Uploaded to private GitHub repository. Repository URL copied; raw media is not public.', 'success');
+      plus.toast('Media uploaded to private GitHub repo.');
+    } else {
+      setMessage('Media uploaded to GitHub. Public raw URL copied to clipboard.', 'success');
+      plus.toast('GitHub media URL copied.');
+    }
+    showResultLink(result.htmlUrl || '', result.private ? 'GitHub media committed to private repository.' : 'Public GitHub media URL copied.');
+    return result;
+  }
+
+  function bind() {
+    const connectBtn = $('githubConnectBtn');
+    const disconnectBtn = $('githubDisconnectBtn');
+    const refreshBtn = $('githubRefreshReposBtn');
+    const saveBtn = $('githubSaveConfigBtn');
+    const commitBtn = $('githubCommitBtn');
+    const importBtn = $('githubImportBtn');
+    const select = $('githubRepoSelect');
+    const settingsBtn = $('settingsBtn');
+
+    if (connectBtn) connectBtn.addEventListener('click', connect);
+    if (disconnectBtn) disconnectBtn.addEventListener('click', disconnect);
+    if (refreshBtn) refreshBtn.addEventListener('click', () => loadRepos(false));
+    if (saveBtn) saveBtn.addEventListener('click', saveConfig);
+    if (commitBtn) commitBtn.addEventListener('click', commitCurrentHtml);
+    if (importBtn) importBtn.addEventListener('click', importHtml);
+    if (select) select.addEventListener('change', () => {
+      const repo = repos.find(item => item.fullName === select.value);
+      if (!repo) return;
+      if ($('githubRepoInput')) $('githubRepoInput').value = repo.fullName;
+      if ($('githubBranchInput')) $('githubBranchInput').value = repo.defaultBranch || 'main';
+    });
+    if (settingsBtn) settingsBtn.addEventListener('click', () => {
+      window.setTimeout(() => {
+        if ($('githubCommitPathInput')) $('githubCommitPathInput').value = currentPageName();
+      }, 40);
+    });
+
+    setStatus('ready');
+    loadStatus(true);
+  }
+
+  window.HTMLStudioGitHub = {
+    isConnected: () => Boolean(state.connected && state.repository),
+    getState: () => Object.assign({}, state),
+    refresh: () => loadStatus(true),
+    publishMediaAsset: publishMediaAsset,
+    commitCurrentHtml: commitCurrentHtml,
+    importHtml: importHtml
+  };
+
+  try { bind(); }
+  catch (error) {
+    console.error('[HTML Studio] GitHub module failed:', error);
+    setStatus('error');
+    plus.toast('GitHub integration could not initialize. Core editing remains available.', 'error');
+  }
+})();
+</script>

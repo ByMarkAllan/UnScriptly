@@ -9,6 +9,11 @@
   let folders = [];
   let activeFolderId = '';
   let busy = false;
+  const previewCache = new Map(); // Session-only preview data; never persisted.
+  const previewPending = new Map();
+  const previewQueue = [];
+  let previewActive = 0;
+  const PREVIEW_CONCURRENCY = 4;
 
   function $(id) { return document.getElementById(id); }
   function setStatus(value) { document.documentElement.setAttribute('data-html-studio-media', value); }
@@ -24,6 +29,100 @@
         .withFailureHandler(error => reject(error instanceof Error ? error : new Error(String(error && error.message || error || 'Drive operation failed.'))));
       if (payload === undefined) runner[method]();
       else runner[method](payload);
+    });
+  }
+
+
+  function driveIdFromUrl(value) {
+    const raw = String(value || '');
+    let match = raw.match(/[?&]id=([^&#]+)/i);
+    if (match) return decodeURIComponent(match[1]);
+    match = raw.match(/\/d\/([^/?#]+)/i);
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  function previewRpc(mediaId) {
+    if (previewCache.has(mediaId)) return Promise.resolve(previewCache.get(mediaId));
+    if (previewPending.has(mediaId)) return previewPending.get(mediaId);
+
+    const promise = new Promise((resolve, reject) => {
+      previewQueue.push({ mediaId, resolve, reject });
+      pumpPreviewQueue();
+    });
+    previewPending.set(mediaId, promise);
+    promise.then(() => previewPending.delete(mediaId), () => previewPending.delete(mediaId));
+    return promise;
+  }
+
+  function pumpPreviewQueue() {
+    while (previewActive < PREVIEW_CONCURRENCY && previewQueue.length) {
+      const job = previewQueue.shift();
+      previewActive++;
+      rpc('htmlStudioGetMediaPreview', job.mediaId)
+        .then(result => {
+          if (result && result.ok && result.dataUrl) previewCache.set(job.mediaId, result.dataUrl);
+          job.resolve(result || null);
+        })
+        .catch(job.reject)
+        .finally(() => { previewActive--; pumpPreviewQueue(); });
+    }
+  }
+
+  function setImagePreview(img, asset) {
+    if (!img || !asset || !asset.id) return;
+    img.classList.add('media-preview-loading');
+    previewRpc(asset.id).then(result => {
+      if (!img.isConnected) return;
+      if (result && result.ok && result.dataUrl) {
+        img.src = result.dataUrl;
+        img.classList.remove('media-preview-loading', 'media-preview-failed');
+      } else {
+        img.classList.remove('media-preview-loading');
+        img.classList.add('media-preview-failed');
+        img.alt = asset.name || 'Drive image';
+      }
+    }).catch(error => {
+      console.warn('[HTML Studio] Drive image preview failed:', error);
+      if (!img.isConnected) return;
+      img.classList.remove('media-preview-loading');
+      img.classList.add('media-preview-failed');
+      img.alt = asset.name || 'Drive image';
+    });
+  }
+
+  function hydratePreviewDriveImages() {
+    const frame = $('previewFrame');
+    if (!frame) return;
+    let doc;
+    try { doc = frame.contentDocument; } catch (_) { return; }
+    if (!doc) return;
+
+    Array.from(doc.querySelectorAll('img[data-unscriptly-drive-id], img[src*="drive.google.com"]')).forEach(img => {
+      const mediaId = img.getAttribute('data-unscriptly-drive-id') || driveIdFromUrl(img.getAttribute('src'));
+      if (!mediaId || img.getAttribute('data-unscriptly-preview-hydrated') === 'true') return;
+      const asset = media.find(item => item.id === mediaId) || { id: mediaId, name: img.getAttribute('alt') || 'Drive image' };
+      img.setAttribute('data-unscriptly-preview-hydrated', 'true');
+      previewRpc(mediaId).then(result => {
+        if (result && result.ok && result.dataUrl && img.isConnected) img.src = result.dataUrl;
+      }).catch(() => {});
+    });
+  }
+
+  function githubConnected() {
+    return Boolean(window.HTMLStudioGitHub && typeof window.HTMLStudioGitHub.isConnected === 'function' && window.HTMLStudioGitHub.isConnected());
+  }
+
+  function publishAssetToGitHub(asset) {
+    if (!window.HTMLStudioGitHub || typeof window.HTMLStudioGitHub.publishMediaAsset !== 'function') {
+      plus.toast('Open Settings → GitHub and connect a repository first.', 'error');
+      return;
+    }
+    window.HTMLStudioGitHub.publishMediaAsset(asset).then(result => {
+      if (!result) return;
+      const url = result.publicUrl || result.rawUrl || result.htmlUrl || '';
+      if (url) setOperationStatus('GitHub media URL copied: ' + url, 'success');
+    }).catch(error => {
+      setOperationStatus(String(error && error.message || error || 'GitHub media upload failed.'), 'error');
     });
   }
 
@@ -215,9 +314,10 @@
 
   function mediaMarkup(asset) {
     const src = escapeAttr(asset.url);
-    if (asset.kind === 'video') return '<video src="' + src + '" controls preload="metadata" style="display:block;width:min(800px,100%);border-radius:12px;"></video>';
-    if (asset.kind === 'audio') return '<audio src="' + src + '" controls preload="metadata" style="display:block;width:min(620px,100%);"></audio>';
-    return '<img src="' + src + '" alt="' + escapeAttr(asset.name || 'Image') + '" style="display:block;max-width:100%;height:auto;">';
+    const driveId = escapeAttr(asset.id || '');
+    if (asset.kind === 'video') return '<video src="' + src + '" data-unscriptly-drive-id="' + driveId + '" controls preload="metadata" style="display:block;width:min(800px,100%);border-radius:12px;"></video>';
+    if (asset.kind === 'audio') return '<audio src="' + src + '" data-unscriptly-drive-id="' + driveId + '" controls preload="metadata" style="display:block;width:min(620px,100%);"></audio>';
+    return '<img src="' + src + '" data-unscriptly-drive-id="' + driveId + '" alt="' + escapeAttr(asset.name || 'Image') + '" style="display:block;max-width:100%;height:auto;">';
   }
 
   function useMediaAsset(asset) {
@@ -226,12 +326,17 @@
     if ((asset.kind === 'image' && selectedTag === 'img') ||
         (asset.kind === 'video' && selectedTag === 'video') ||
         (asset.kind === 'audio' && selectedTag === 'audio')) {
-      plus.attrSelected('src', asset.url, { message: 'Drive media linked.' });
-      if (asset.kind === 'image' && selected && !(selected.attrs && selected.attrs.alt)) plus.attrSelected('alt', asset.name || 'Image', { message: 'Alt text added.' });
+      plus.patchSelected(target => {
+        target.setAttribute('src', asset.url);
+        target.setAttribute('data-unscriptly-drive-id', asset.id || '');
+        if (asset.kind === 'image' && !target.getAttribute('alt')) target.setAttribute('alt', asset.name || 'Image');
+      }, { message: 'Drive media linked.' });
+      window.setTimeout(hydratePreviewDriveImages, 180);
       return;
     }
     const positionInput = $('insertPositionInput');
     plus.insertHtml(mediaMarkup(asset), positionInput ? positionInput.value : 'smart', { message: 'Drive media added.' });
+    window.setTimeout(hydratePreviewDriveImages, 180);
   }
 
   async function deleteAsset(asset) {
@@ -282,11 +387,12 @@
       thumb.className = 'media-thumb';
       if (asset.kind === 'image') {
         const img = document.createElement('img');
-        img.src = asset.thumbnailUrl || asset.url;
-        img.alt = '';
+        img.alt = asset.name || 'Drive image';
         img.loading = 'lazy';
         img.referrerPolicy = 'no-referrer';
+        img.src = 'data:image/svg+xml;charset=utf-8,%3Csvg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 320 200"%3E%3Crect width="320" height="200" fill="%23f2f2f0"/%3E%3C/svg%3E';
         thumb.appendChild(img);
+        setImagePreview(img, asset);
       } else {
         const glyph = document.createElement('span');
         glyph.className = 'media-kind-glyph';
@@ -311,6 +417,16 @@
       useBtn.type = 'button';
       useBtn.textContent = 'Use';
       useBtn.addEventListener('click', event => { event.stopPropagation(); useMediaAsset(asset); });
+      if (window.HTMLStudioGitHub) {
+        const githubBtn = document.createElement('button');
+        githubBtn.type = 'button';
+        githubBtn.className = 'media-github-btn';
+        githubBtn.textContent = 'GitHub';
+        githubBtn.title = githubConnected() ? 'Upload to the connected GitHub repository and copy the media URL' : 'Connect GitHub in Settings first';
+        githubBtn.disabled = !githubConnected();
+        githubBtn.addEventListener('click', event => { event.stopPropagation(); publishAssetToGitHub(asset); });
+        actions.appendChild(githubBtn);
+      }
       const driveLink = document.createElement('a');
       driveLink.className = 'media-drive-link';
       driveLink.href = asset.driveUrl || '#';
@@ -394,6 +510,8 @@
 
     bindMediaInspector();
     document.addEventListener('htmlstudio:plus-selection', event => updateSelectionControls(event.detail || null));
+    document.addEventListener('htmlstudio:plus-preview-ready', () => window.setTimeout(hydratePreviewDriveImages, 80));
+    document.addEventListener('htmlstudio:github-status', () => renderMediaLibrary());
     setStatus('ready');
     loadLibrary('', false);
   }

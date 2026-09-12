@@ -16,7 +16,7 @@
         <div class="brand-mark" aria-hidden="true">U</div>
         <div>
           <div class="brand-name">HTML Studio</div>
-          <div class="brand-sub">UnScriptly™ <span class="build-badge starting" id="buildStatusBadge" data-build="<?= BUILD_ID ?>">v8.11.0 · STARTING</span></div>
+          <div class="brand-sub">UnScriptly™ <span class="build-badge starting" id="buildStatusBadge" data-build="<?= BUILD_ID ?>">v8.12.0 · STARTING</span></div>
         </div>
       </div>
 
@@ -791,6 +791,64 @@
           <div><div class="eyebrow">Editor</div><h3>Interface</h3></div>
           <label class="check-row"><input id="showCanvasGridInput" type="checkbox" checked> Show canvas grid</label>
         </section>
+        <section class="settings-section github-settings-section" id="githubSettingsSection">
+          <div class="settings-section-head github-settings-head">
+            <div><div class="eyebrow">Integration</div><h3>GitHub</h3><p>Connect a repository to import HTML, commit edited pages, and publish Drive media to GitHub-hosted URLs.</p></div>
+            <span class="github-connection-badge disconnected" id="githubConnectionBadge">Not connected</span>
+          </div>
+
+          <div class="github-account-row">
+            <div class="field-help" id="githubAccountSummary">Connect a fine-grained personal access token. The token is stored server-side in Apps Script UserProperties.</div>
+            <button class="button secondary small hidden" id="githubDisconnectBtn" type="button">Disconnect</button>
+          </div>
+
+          <div class="github-connect-block" id="githubConnectBlock">
+            <label class="field-label" for="githubTokenInput">Personal access token</label>
+            <div class="github-inline-row">
+              <input id="githubTokenInput" class="field" type="password" autocomplete="off" placeholder="github_pat_… or ghp_…">
+              <button class="button primary" id="githubConnectBtn" type="button">Connect GitHub</button>
+            </div>
+            <div class="field-help">Recommended: a fine-grained token restricted to the repository you want to use, with repository Contents read/write permission.</div>
+          </div>
+
+          <div class="github-repository-block hidden" id="githubRepositoryBlock">
+            <div class="settings-grid two-col">
+              <div>
+                <label class="field-label" for="githubRepoSelect">Accessible repositories</label>
+                <div class="github-inline-row">
+                  <select id="githubRepoSelect" class="field"><option value="">Choose accessible repository…</option></select>
+                  <button class="button secondary small" id="githubRefreshReposBtn" type="button">Refresh</button>
+                </div>
+              </div>
+              <div><label class="field-label" for="githubRepoInput">Repository <span class="label-muted">owner/repository</span></label><input id="githubRepoInput" class="field" type="text" placeholder="owner/repository"></div>
+              <div><label class="field-label" for="githubBranchInput">Branch</label><input id="githubBranchInput" class="field" type="text" value="main" placeholder="main"></div>
+              <div><label class="field-label" for="githubMediaPathInput">Media folder</label><input id="githubMediaPathInput" class="field" type="text" value="assets/media" placeholder="assets/media"></div>
+            </div>
+            <button class="button secondary" id="githubSaveConfigBtn" type="button">Save repository settings</button>
+          </div>
+
+          <div class="github-source-sync hidden" id="githubSourceSyncBlock">
+            <div class="github-sync-card">
+              <div><div class="eyebrow">Commit</div><strong>Current HTML page</strong></div>
+              <label class="field-label" for="githubCommitPathInput">Repository file path</label>
+              <input id="githubCommitPathInput" class="field" type="text" placeholder="index.html">
+              <label class="field-label" for="githubCommitMessageInput">Commit message</label>
+              <input id="githubCommitMessageInput" class="field" type="text" placeholder="Update page from UnScriptly">
+              <button class="button primary" id="githubCommitBtn" type="button">Commit current HTML</button>
+            </div>
+            <div class="github-sync-card">
+              <div><div class="eyebrow">Import</div><strong>HTML from repository</strong></div>
+              <label class="field-label" for="githubImportPathInput">Repository file path</label>
+              <input id="githubImportPathInput" class="field" type="text" placeholder="pages/index.html">
+              <button class="button secondary" id="githubImportBtn" type="button">Import HTML</button>
+            </div>
+          </div>
+
+          <div class="github-result-row">
+            <div class="field-help github-operation-status" id="githubOperationStatus"></div>
+            <a id="githubResultLink" class="button secondary small hidden" href="#" target="_blank" rel="noopener">Open in GitHub ↗</a>
+          </div>
+        </section>
       </div>
       <div class="modal-foot settings-actions">
         <button class="button secondary" id="resetGlobalStylesBtn" type="button">Remove global overrides</button>
@@ -896,6 +954,7 @@
   <?!= studioIncludeOptional_('StudioComponents', 'components library'); ?>
   <?!= studioIncludeOptional_('StudioSocial', 'social and link bar'); ?>
   <?!= studioIncludeOptional_('StudioMedia', 'media'); ?>
+  <?!= studioIncludeOptional_('StudioGitHub', 'github integration'); ?>
   <?!= studioIncludeOptional_('StudioGallery', 'gallery and slideshow'); ?>
   <?!= studioIncludeOptional_('StudioLinking', 'universal link URL controls'); ?>
   <?!= studioIncludeOptional_('StudioNavigation', 'button navigation mapping'); ?>
@@ -919,39 +978,45 @@
       var componentsState = document.documentElement.getAttribute('data-html-studio-components') || 'missing';
       var galleryState = document.documentElement.getAttribute('data-html-studio-gallery') || 'missing';
       var mediaState = document.documentElement.getAttribute('data-html-studio-media') || 'missing';
+      var githubState = document.documentElement.getAttribute('data-html-studio-github') || 'missing';
       var linkingState = document.documentElement.getAttribute('data-html-studio-linking') || 'missing';
       var socialState = document.documentElement.getAttribute('data-html-studio-social') || 'missing';
       var elementExportState = document.documentElement.getAttribute('data-html-studio-element-export') || 'missing';
       var errors = window.__HTML_STUDIO_BOOT_ERRORS || [];
       if (ready && (layersState !== 'ready' || layerBridgeState !== 'ready') && !/ERROR/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.11.0 · LAYER SYNC NOT READY';
+        badge.textContent = 'v8.12.0 · LAYER SYNC NOT READY';
         badge.className = 'build-badge warn';
         badge.title = layerBridgeState !== 'ready' ? 'The layer preview bridge did not initialize.' : 'The Layers module did not initialize.';
         var layersEmpty = document.getElementById('layersEmptyState');
         if (layersEmpty) layersEmpty.textContent = 'Layers module did not initialize. Verify StudioLayers.html is installed, then redeploy.';
       }
       if (ready && (reviewBridgeState !== 'ready' || reviewState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.11.0 · REVIEW TOOLS NOT READY';
+        badge.textContent = 'v8.12.0 · REVIEW TOOLS NOT READY';
         badge.className = 'build-badge warn';
         badge.title = reviewBridgeState !== 'ready' ? 'The wireframe/notes preview bridge did not initialize.' : 'The wireframe/notes module did not initialize.';
       }
       if (ready && (componentsState !== 'ready' || galleryState !== 'ready' || mediaState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.11.0 · LIBRARIES NOT READY';
+        badge.textContent = 'v8.12.0 · LIBRARIES NOT READY';
         badge.className = 'build-badge warn';
         badge.title = componentsState !== 'ready' ? 'The Components library did not initialize.' : (mediaState !== 'ready' ? 'The Google Drive Media Library did not initialize.' : 'Gallery / Slideshow did not initialize.');
       }
+      if (ready && githubState !== 'ready' && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.12.0 · GITHUB MODULE NOT READY';
+        badge.className = 'build-badge warn';
+        badge.title = 'The GitHub integration module did not initialize. Core editing remains available.';
+      }
       if (ready && (linkingState !== 'ready' || socialState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.11.0 · LINK TOOLS NOT READY';
+        badge.textContent = 'v8.12.0 · LINK TOOLS NOT READY';
         badge.className = 'build-badge warn';
         badge.title = linkingState !== 'ready' ? 'Universal Link URL controls did not initialize.' : 'Social / Link Bar did not initialize.';
       }
       if (ready && elementExportState !== 'ready' && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.11.0 · ELEMENT EXPORT NOT READY';
+        badge.textContent = 'v8.12.0 · ELEMENT EXPORT NOT READY';
         badge.className = 'build-badge warn';
         badge.title = 'Element / Group export did not initialize.';
       }
       if (!ready && !/ERROR/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.11.0 · CORE NOT READY';
+        badge.textContent = 'v8.12.0 · CORE NOT READY';
         badge.className = 'build-badge error';
         badge.title = errors.length ? errors[errors.length - 1].message : 'The v1 core did not pass its startup probe.';
       }
