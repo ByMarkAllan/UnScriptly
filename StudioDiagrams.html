@@ -1,0 +1,1161 @@
+<script>
+(function () {
+  'use strict';
+
+  var plus = window.HTMLStudioPlus;
+  if (!plus) return;
+
+  var HTML2CANVAS_URL = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+  var rendererSourcePromise = null;
+  var activeDiagramPngUrl = '';
+
+  var state = {
+    schemaVersion: 1,
+    activeDiagramId: '',
+    diagrams: [],
+    selectedNodeId: '',
+    selectedEdgeId: '',
+    connectSourceId: '',
+    active: false,
+    drag: null,
+    uiSnapshot: null,
+    mermaidEditing: false,
+    mermaidTimer: 0
+  };
+
+  var TYPE_LABELS = {
+    'ia': 'Information Architecture',
+    'user-flow': 'User Flow',
+    'journey-map': 'Journey Map',
+    'sitemap': 'Sitemap',
+    'service-blueprint': 'Service Blueprint',
+    'blank': 'Blank Diagram'
+  };
+
+  var NODE_DEFAULTS = {
+    screen:      { title: 'Page / Screen', subtitle: '', shape: 'rounded', fill: '#ffffff', text: '#111111', border: '#111111', width: 180, radius: 14, fontSize: 14, bold: true },
+    section:     { title: 'Section', subtitle: '', shape: 'rectangle', fill: '#f6f6f3', text: '#111111', border: '#bdbdb8', width: 180, radius: 8, fontSize: 14, bold: true },
+    action:      { title: 'Action', subtitle: '', shape: 'rounded', fill: '#111111', text: '#ffffff', border: '#111111', width: 170, radius: 12, fontSize: 14, bold: true },
+    decision:    { title: 'Decision?', subtitle: '', shape: 'diamond', fill: '#fff8dc', text: '#111111', border: '#b78a00', width: 180, radius: 0, fontSize: 13, bold: true },
+    terminal:    { title: 'Start / End', subtitle: '', shape: 'pill', fill: '#e8f6ef', text: '#145d40', border: '#77b99d', width: 150, radius: 999, fontSize: 13, bold: true },
+    stage:       { title: 'Journey Stage', subtitle: '', shape: 'rounded', fill: '#eef3ff', text: '#1d3f7a', border: '#9db4df', width: 190, radius: 14, fontSize: 14, bold: true },
+    touchpoint:  { title: 'Touchpoint', subtitle: '', shape: 'circle', fill: '#ffffff', text: '#111111', border: '#777777', width: 150, radius: 999, fontSize: 12, bold: true },
+    pain:        { title: 'Pain Point', subtitle: '', shape: 'rounded', fill: '#fff0ee', text: '#8f1d13', border: '#dd8d84', width: 170, radius: 12, fontSize: 13, bold: true },
+    opportunity: { title: 'Opportunity', subtitle: '', shape: 'rounded', fill: '#eef9f2', text: '#17633d', border: '#82c59e', width: 180, radius: 12, fontSize: 13, bold: true },
+    note:        { title: 'Note', subtitle: 'Add context…', shape: 'rectangle', fill: '#fffbe8', text: '#5d501b', border: '#d9c86d', width: 190, radius: 6, fontSize: 12, bold: false }
+  };
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
+  function now() { return new Date().toISOString(); }
+  function uid(prefix) { return (prefix || 'id') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7); }
+  function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+  function clean(value) { return String(value == null ? '' : value).replace(/\s+/g, ' ').trim(); }
+  function safeName(value, fallback) { var text = clean(value).replace(/[\\/:*?"<>|]+/g, '-'); return text || fallback || 'diagram'; }
+  function setStatus(value) { document.documentElement.setAttribute('data-html-studio-diagrams', value); }
+
+  function activeDiagram() {
+    for (var i = 0; i < state.diagrams.length; i++) if (state.diagrams[i].id === state.activeDiagramId) return state.diagrams[i];
+    return state.diagrams[0] || null;
+  }
+
+  function selectedNode() {
+    var diagram = activeDiagram();
+    if (!diagram) return null;
+    for (var i = 0; i < diagram.nodes.length; i++) if (diagram.nodes[i].id === state.selectedNodeId) return diagram.nodes[i];
+    return null;
+  }
+
+  function selectedEdge() {
+    var diagram = activeDiagram();
+    if (!diagram) return null;
+    for (var i = 0; i < diagram.edges.length; i++) if (diagram.edges[i].id === state.selectedEdgeId) return diagram.edges[i];
+    return null;
+  }
+
+  function pageNames() {
+    return qsa('#pageList .page-item .page-name').map(function (node) { return clean(node.textContent); }).filter(Boolean);
+  }
+
+  function activatePage(name) {
+    var rows = qsa('#pageList .page-item');
+    for (var i = 0; i < rows.length; i++) {
+      var label = rows[i].querySelector('.page-name');
+      if (label && clean(label.textContent) === name) {
+        if (window.HTMLStudioModes && typeof HTMLStudioModes.set === 'function') HTMLStudioModes.set('html', { view: 'pages' });
+        else if (window.HTMLStudioWorkspace && HTMLStudioWorkspace.show) HTMLStudioWorkspace.show('pages');
+        rows[i].click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function markDirty() {
+    var diagram = activeDiagram();
+    if (diagram) diagram.updatedAt = now();
+    if (window.HTMLStudioProjects && HTMLStudioProjects.markDirty) HTMLStudioProjects.markDirty();
+    document.dispatchEvent(new CustomEvent('htmlstudio:diagrams-changed'));
+  }
+
+  function nodeFrom(type, x, y, overrides) {
+    var base = NODE_DEFAULTS[type] || NODE_DEFAULTS.screen;
+    var node = {
+      id: uid('node'), type: type || 'screen', title: base.title, subtitle: base.subtitle,
+      x: Number(x || 80), y: Number(y || 80), page: '',
+      style: { shape: base.shape, fill: base.fill, text: base.text, border: base.border, width: base.width, radius: base.radius, fontSize: base.fontSize, bold: base.bold }
+    };
+    overrides = overrides || {};
+    Object.keys(overrides).forEach(function (key) {
+      if (key === 'style') node.style = Object.assign({}, node.style, overrides.style || {});
+      else node[key] = overrides[key];
+    });
+    return node;
+  }
+
+  function edgeFrom(from, to, label) {
+    return { id: uid('edge'), from: from, to: to, label: label || '', style: 'solid', color: '#777777', arrow: true };
+  }
+
+  function blankDiagram(type, name) {
+    return {
+      id: uid('diagram'), name: name || (TYPE_LABELS[type] || 'Diagram'), type: type || 'blank',
+      createdAt: now(), updatedAt: now(),
+      settings: { snap: true, canvasWidth: 16000, canvasHeight: 10000, zoom: 1 },
+      nodes: [], edges: []
+    };
+  }
+
+  function templateDiagram(type) {
+    var d = blankDiagram(type, TYPE_LABELS[type] || 'Diagram');
+    if (type === 'ia') {
+      var home = nodeFrom('screen', 690, 70, { title: 'Home', subtitle: 'Primary entry point' });
+      var p1 = nodeFrom('section', 250, 300, { title: 'Products' });
+      var p2 = nodeFrom('section', 580, 300, { title: 'About' });
+      var p3 = nodeFrom('section', 900, 300, { title: 'Resources' });
+      var p4 = nodeFrom('section', 1230, 300, { title: 'Contact' });
+      var child = nodeFrom('screen', 250, 540, { title: 'Product Detail' });
+      d.nodes = [home, p1, p2, p3, p4, child];
+      d.edges = [edgeFrom(home.id,p1.id),edgeFrom(home.id,p2.id),edgeFrom(home.id,p3.id),edgeFrom(home.id,p4.id),edgeFrom(p1.id,child.id)];
+    } else if (type === 'user-flow') {
+      var start = nodeFrom('terminal', 710, 60, { title: 'Start' });
+      var landing = nodeFrom('screen', 690, 230, { title: 'Landing Page' });
+      var decision = nodeFrom('decision', 690, 420, { title: 'Signed in?' });
+      var dash = nodeFrom('screen', 420, 650, { title: 'Dashboard' });
+      var login = nodeFrom('action', 960, 650, { title: 'Sign In' });
+      var end = nodeFrom('terminal', 420, 830, { title: 'Goal complete' });
+      d.nodes=[start,landing,decision,dash,login,end];
+      d.edges=[edgeFrom(start.id,landing.id),edgeFrom(landing.id,decision.id),edgeFrom(decision.id,dash.id,'Yes'),edgeFrom(decision.id,login.id,'No'),edgeFrom(login.id,dash.id,'Success'),edgeFrom(dash.id,end.id)];
+    } else if (type === 'journey-map') {
+      var stages = ['Discover','Evaluate','Use','Return'];
+      stages.forEach(function (stage, index) {
+        var x = 120 + index * 360;
+        var s = nodeFrom('stage', x, 80, { title: stage });
+        var t = nodeFrom('touchpoint', x+20, 300, { title: 'Touchpoint', subtitle: 'What the user does' });
+        var p = nodeFrom('pain', x+10, 510, { title: 'Pain Point', subtitle: 'Friction or uncertainty' });
+        var o = nodeFrom('opportunity', x+5, 720, { title: 'Opportunity', subtitle: 'Design response' });
+        d.nodes.push(s,t,p,o);
+        d.edges.push(edgeFrom(s.id,t.id),edgeFrom(t.id,p.id),edgeFrom(p.id,o.id));
+        if (index > 0) d.edges.push(edgeFrom(d.nodes[(index-1)*4].id, s.id, 'Next stage'));
+      });
+    } else if (type === 'sitemap') {
+      var root = nodeFrom('screen', 700, 70, { title: 'Website' });
+      var labels = ['Home','Services','Work','About','Contact'];
+      d.nodes.push(root);
+      labels.forEach(function (label,index) { var n=nodeFrom('screen',120+index*290,320,{title:label});d.nodes.push(n);d.edges.push(edgeFrom(root.id,n.id)); });
+    } else if (type === 'service-blueprint') {
+      var start2=nodeFrom('terminal',80,110,{title:'Customer need'});
+      var touch=nodeFrom('touchpoint',370,110,{title:'Frontstage touchpoint'});
+      var action=nodeFrom('action',680,110,{title:'Backstage action'});
+      var support=nodeFrom('section',1000,110,{title:'Support process'});
+      var finish=nodeFrom('terminal',1290,110,{title:'Outcome'});
+      d.nodes=[start2,touch,action,support,finish];
+      d.edges=[edgeFrom(start2.id,touch.id),edgeFrom(touch.id,action.id),edgeFrom(action.id,support.id),edgeFrom(support.id,finish.id)];
+    }
+    return d;
+  }
+
+  function normalizeProjectData(input) {
+    var raw = input && Array.isArray(input.diagrams) ? input : { diagrams: [] };
+    var normalized = { schemaVersion: 1, activeDiagramId: clean(raw.activeDiagramId), diagrams: [] };
+    raw.diagrams.slice(0, 40).forEach(function (item) {
+      if (!item) return;
+      var d = blankDiagram(item.type || 'blank', clean(item.name) || 'Diagram');
+      d.id = clean(item.id) || uid('diagram');
+      d.createdAt = clean(item.createdAt) || now();
+      d.updatedAt = clean(item.updatedAt) || d.createdAt;
+      d.settings = Object.assign(d.settings, item.settings || {});
+      d.settings.canvasWidth = Math.max(16000, Number(d.settings.canvasWidth || 16000));
+      d.settings.canvasHeight = Math.max(10000, Number(d.settings.canvasHeight || 10000));
+      d.settings.zoom = clamp(Number(d.settings.zoom || 1), 0.1, 2);
+      d.nodes = [];
+      (Array.isArray(item.nodes) ? item.nodes : []).slice(0, 500).forEach(function (rawNode) {
+        if (!rawNode) return;
+        var n = nodeFrom(rawNode.type || 'screen', Number(rawNode.x || 0), Number(rawNode.y || 0), rawNode);
+        n.id = clean(rawNode.id) || uid('node');
+        n.title = String(rawNode.title || 'Node').slice(0, 220);
+        n.subtitle = String(rawNode.subtitle || '').slice(0, 1200);
+        n.page = String(rawNode.page || '').slice(0, 220);
+        n.x = clamp(Number(rawNode.x || 0), 0, d.settings.canvasWidth - 100);
+        n.y = clamp(Number(rawNode.y || 0), 0, d.settings.canvasHeight - 60);
+        d.nodes.push(n);
+      });
+      var ids = {};
+      d.nodes.forEach(function (n) { ids[n.id] = true; });
+      d.edges = [];
+      (Array.isArray(item.edges) ? item.edges : []).slice(0, 1000).forEach(function (rawEdge) {
+        if (!rawEdge || !ids[rawEdge.from] || !ids[rawEdge.to]) return;
+        d.edges.push({ id: clean(rawEdge.id) || uid('edge'), from: rawEdge.from, to: rawEdge.to, label: String(rawEdge.label || '').slice(0,300), style: rawEdge.style === 'dashed' ? 'dashed' : 'solid', color: /^#[0-9a-f]{6}$/i.test(rawEdge.color || '') ? rawEdge.color : '#777777', arrow: rawEdge.arrow !== false });
+      });
+      normalized.diagrams.push(d);
+    });
+    if (!normalized.diagrams.some(function (d) { return d.id === normalized.activeDiagramId; })) normalized.activeDiagramId = normalized.diagrams[0] ? normalized.diagrams[0].id : '';
+    return normalized;
+  }
+
+  function renderDiagramList() {
+    var list = $('diagramList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!state.diagrams.length) {
+      var empty = document.createElement('div');
+      empty.className = 'diagram-list-empty';
+      empty.textContent = 'No diagrams yet. Choose a template and create one.';
+      list.appendChild(empty);
+      return;
+    }
+    state.diagrams.forEach(function (diagram) {
+      var row = document.createElement('button');
+      row.type = 'button'; row.className = 'diagram-list-item' + (diagram.id === state.activeDiagramId ? ' active' : '');
+      row.innerHTML = '<span class="diagram-list-icon">⌘</span><span class="diagram-list-copy"><strong></strong><small></small></span><span class="diagram-list-count"></span>';
+      row.querySelector('strong').textContent = diagram.name;
+      row.querySelector('small').textContent = TYPE_LABELS[diagram.type] || 'Diagram';
+      row.querySelector('.diagram-list-count').textContent = diagram.nodes.length;
+      row.addEventListener('click', function () { state.activeDiagramId = diagram.id; state.selectedNodeId=''; state.selectedEdgeId=''; state.connectSourceId=''; renderAll(); });
+      list.appendChild(row);
+    });
+  }
+
+  function getDiagramZoom() {
+    var diagram = activeDiagram();
+    return clamp(Number(diagram && diagram.settings && diagram.settings.zoom || 1), 0.1, 2);
+  }
+
+  function applyDiagramZoom(preserveCenter) {
+    var diagram = activeDiagram();
+    var board = $('diagramBoard');
+    var wrap = $('diagramBoardZoom');
+    var scroll = $('diagramBoardScroll');
+    if (!diagram || !board || !wrap) return;
+    var zoom = getDiagramZoom();
+    var oldZoom = Number(wrap.getAttribute('data-zoom') || zoom) || zoom;
+    var logicalCenterX = 0, logicalCenterY = 0;
+    if (preserveCenter && scroll) {
+      logicalCenterX = (scroll.scrollLeft + scroll.clientWidth / 2) / oldZoom;
+      logicalCenterY = (scroll.scrollTop + scroll.clientHeight / 2) / oldZoom;
+    }
+    var width = Math.max(16000, Number(diagram.settings.canvasWidth || 16000));
+    var height = Math.max(10000, Number(diagram.settings.canvasHeight || 10000));
+    wrap.style.width = Math.max(1, Math.round(width * zoom)) + 'px';
+    wrap.style.height = Math.max(1, Math.round(height * zoom)) + 'px';
+    wrap.setAttribute('data-zoom', String(zoom));
+    board.style.transformOrigin = '0 0';
+    board.style.transform = 'scale(' + zoom + ')';
+    var label = $('diagramZoomLabel');
+    if (label) label.textContent = Math.round(zoom * 100) + '%';
+    if (preserveCenter && scroll) {
+      scroll.scrollLeft = Math.max(0, logicalCenterX * zoom - scroll.clientWidth / 2);
+      scroll.scrollTop = Math.max(0, logicalCenterY * zoom - scroll.clientHeight / 2);
+    }
+  }
+
+  function setDiagramZoom(value, preserveCenter) {
+    var diagram = activeDiagram();
+    if (!diagram) return;
+    diagram.settings.zoom = clamp(Math.round(Number(value || 1) * 100) / 100, 0.1, 2);
+    applyDiagramZoom(preserveCenter !== false);
+    markDirty();
+  }
+
+  function diagramLogicalBounds() {
+    var diagram = activeDiagram();
+    if (!diagram || !diagram.nodes.length) return { x: 0, y: 0, width: 1200, height: 800 };
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    diagram.nodes.forEach(function (node) {
+      var width = clamp(Number(node.style && node.style.width || 180), 100, 420);
+      var height = node.style && node.style.shape === 'circle' ? width : (node.style && node.style.shape === 'diamond' ? 130 : 110);
+      minX = Math.min(minX, Number(node.x || 0));
+      minY = Math.min(minY, Number(node.y || 0));
+      maxX = Math.max(maxX, Number(node.x || 0) + width);
+      maxY = Math.max(maxY, Number(node.y || 0) + height);
+    });
+    var pad = 140;
+    return { x: Math.max(0, minX - pad), y: Math.max(0, minY - pad), width: Math.max(1, maxX - minX + pad * 2), height: Math.max(1, maxY - minY + pad * 2) };
+  }
+
+  function fitDiagramToViewport() {
+    var diagram = activeDiagram();
+    var scroll = $('diagramBoardScroll');
+    if (!diagram || !scroll) return;
+    var bounds = diagramLogicalBounds();
+    var availableW = Math.max(200, scroll.clientWidth - 40);
+    var availableH = Math.max(160, scroll.clientHeight - 40);
+    var zoom = clamp(Math.min(availableW / bounds.width, availableH / bounds.height), 0.1, 1.5);
+    diagram.settings.zoom = Math.round(zoom * 100) / 100;
+    applyDiagramZoom(false);
+    scroll.scrollLeft = Math.max(0, bounds.x * zoom - 20);
+    scroll.scrollTop = Math.max(0, bounds.y * zoom - 20);
+    markDirty();
+  }
+
+  function renderBoard() {
+    var diagram = activeDiagram();
+    var board = $('diagramBoard');
+    var nodesLayer = $('diagramNodeLayer');
+    var edgeLayer = $('diagramEdgeLayer');
+    var hint = $('diagramEmptyHint');
+    if (!board || !nodesLayer || !edgeLayer) return;
+    nodesLayer.innerHTML = '';
+    while (edgeLayer.firstChild) edgeLayer.removeChild(edgeLayer.firstChild);
+    if (!diagram) {
+      if (hint) hint.classList.remove('hidden');
+      updateCanvasIdentity();
+      return;
+    }
+    var width = Math.max(16000, Number(diagram.settings.canvasWidth || 16000));
+    var height = Math.max(10000, Number(diagram.settings.canvasHeight || 10000));
+    diagram.settings.canvasWidth = width; diagram.settings.canvasHeight = height;
+    board.style.width = width + 'px'; board.style.height = height + 'px';
+    applyDiagramZoom(false);
+    board.classList.toggle('no-snap', !diagram.settings.snap);
+    if ($('diagramSnapInput')) $('diagramSnapInput').checked = diagram.settings.snap !== false;
+    edgeLayer.setAttribute('width', String(width)); edgeLayer.setAttribute('height', String(height)); edgeLayer.setAttribute('viewBox','0 0 '+width+' '+height);
+    renderEdges(diagram, edgeLayer);
+    diagram.nodes.forEach(function (node) { nodesLayer.appendChild(renderNode(node)); });
+    if (hint) hint.classList.toggle('hidden', diagram.nodes.length > 0);
+    updateCanvasIdentity();
+  }
+
+  function renderNode(node) {
+    var el = document.createElement('div');
+    el.className = 'diagram-node diagram-shape-' + (node.style.shape || 'rounded') + (node.id === state.selectedNodeId ? ' selected' : '') + (node.id === state.connectSourceId ? ' connect-source' : '');
+    el.setAttribute('data-node-id', node.id);
+    el.style.left = Math.round(node.x) + 'px'; el.style.top = Math.round(node.y) + 'px';
+    el.style.width = clamp(Number(node.style.width || 180),100,420) + 'px';
+    el.style.setProperty('--node-fill', node.style.fill || '#ffffff');
+    el.style.setProperty('--node-text', node.style.text || '#111111');
+    el.style.setProperty('--node-border', node.style.border || '#111111');
+    el.style.setProperty('--node-radius', clamp(Number(node.style.radius || 0),0,999) + 'px');
+    el.style.setProperty('--node-font', clamp(Number(node.style.fontSize || 14),9,30) + 'px');
+    el.innerHTML = '<div class="diagram-node-kind"></div><div class="diagram-node-title"></div><div class="diagram-node-subtitle"></div><div class="diagram-node-page hidden"></div>';
+    el.querySelector('.diagram-node-kind').textContent = node.type.replace(/-/g,' ');
+    var title = el.querySelector('.diagram-node-title'); title.textContent = node.title || 'Node'; title.style.fontWeight = node.style.bold === false ? '500' : '760';
+    var sub = el.querySelector('.diagram-node-subtitle'); sub.textContent = node.subtitle || ''; sub.classList.toggle('hidden', !node.subtitle);
+    var page = el.querySelector('.diagram-node-page'); if (node.page) { page.textContent='↗ '+node.page; page.classList.remove('hidden'); }
+    el.addEventListener('pointerdown', onNodePointerDown);
+    el.addEventListener('click', function (event) { onNodeClick(event, node.id); });
+    el.addEventListener('dblclick', function () { if (node.page) activatePage(node.page); });
+    return el;
+  }
+
+  function nodeCenter(node) {
+    var width = clamp(Number(node.style.width || 180),100,420);
+    var height = node.style.shape === 'circle' ? width : 96;
+    return { x: Number(node.x || 0) + width / 2, y: Number(node.y || 0) + height / 2 };
+  }
+
+  function renderEdges(diagram, svg) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var defs = document.createElementNS(ns,'defs');
+    var marker = document.createElementNS(ns,'marker'); marker.setAttribute('id','diagramArrow'); marker.setAttribute('markerWidth','10'); marker.setAttribute('markerHeight','10'); marker.setAttribute('refX','9'); marker.setAttribute('refY','3'); marker.setAttribute('orient','auto'); marker.setAttribute('markerUnits','strokeWidth');
+    var arrowPath = document.createElementNS(ns,'path'); arrowPath.setAttribute('d','M0,0 L0,6 L9,3 z'); arrowPath.setAttribute('fill','context-stroke'); marker.appendChild(arrowPath); defs.appendChild(marker); svg.appendChild(defs);
+    var lookup = {}; diagram.nodes.forEach(function (n) { lookup[n.id]=n; });
+    diagram.edges.forEach(function (edge) {
+      var from=lookup[edge.from],to=lookup[edge.to]; if(!from||!to)return;
+      var a=nodeCenter(from),b=nodeCenter(to); var dy=Math.max(50,Math.abs(b.y-a.y)*.45); var dx=Math.max(50,Math.abs(b.x-a.x)*.35);
+      var horizontal=Math.abs(b.x-a.x)>Math.abs(b.y-a.y)*1.25;
+      var d = horizontal ? ('M '+a.x+' '+a.y+' C '+(a.x+(b.x>a.x?dx:-dx))+' '+a.y+', '+(b.x+(b.x>a.x?-dx:dx))+' '+b.y+', '+b.x+' '+b.y) : ('M '+a.x+' '+a.y+' C '+a.x+' '+(a.y+(b.y>a.y?dy:-dy))+', '+b.x+' '+(b.y+(b.y>a.y?-dy:dy))+', '+b.x+' '+b.y);
+      var group=document.createElementNS(ns,'g'); group.setAttribute('data-edge-id',edge.id); group.classList.add('diagram-edge-group'); if(edge.id===state.selectedEdgeId)group.classList.add('selected');
+      var hit=document.createElementNS(ns,'path'); hit.setAttribute('d',d); hit.setAttribute('class','diagram-edge-hit');
+      var path=document.createElementNS(ns,'path'); path.setAttribute('d',d); path.setAttribute('class','diagram-edge-path'); path.setAttribute('stroke',edge.color||'#777777'); if(edge.style==='dashed')path.setAttribute('stroke-dasharray','7 6'); if(edge.arrow!==false)path.setAttribute('marker-end','url(#diagramArrow)');
+      group.appendChild(hit);group.appendChild(path);
+      if(edge.label){var text=document.createElementNS(ns,'text');text.setAttribute('x',String((a.x+b.x)/2));text.setAttribute('y',String((a.y+b.y)/2-8));text.setAttribute('class','diagram-edge-label');text.textContent=edge.label;group.appendChild(text);}
+      group.addEventListener('click',function(ev){ev.stopPropagation();state.selectedEdgeId=edge.id;state.selectedNodeId='';state.connectSourceId='';renderAll();});
+      svg.appendChild(group);
+    });
+  }
+
+  function updateCanvasIdentity() {
+    var d=activeDiagram();
+    if($('diagramCanvasTitle')) $('diagramCanvasTitle').textContent=d?d.name:'No diagram selected';
+    if($('diagramNameInput') && document.activeElement !== $('diagramNameInput')) $('diagramNameInput').value=d?d.name:'';
+    if($('diagramCanvasType')) $('diagramCanvasType').textContent=d?(TYPE_LABELS[d.type]||'Diagram'):'Create or choose a diagram';
+  }
+
+  function renderInspector() {
+    var root=$('diagramInspector'),empty=$('diagramInspectorEmpty'),nodePanel=$('diagramNodeInspector'),edgePanel=$('diagramEdgeInspector');
+    if(!root)return;
+    var node=selectedNode(),edge=selectedEdge();
+    empty.classList.toggle('hidden',!!node||!!edge); nodePanel.classList.toggle('hidden',!node); edgePanel.classList.toggle('hidden',!edge);
+    var title=$('selectedElementTitle'); if(title&&state.active)title.textContent=node?(node.title||'Diagram node'):edge?'Connection':'Diagram';
+    if(node){
+      $('diagramNodeTitleInput').value=node.title||''; $('diagramNodeSubtitleInput').value=node.subtitle||'';
+      refreshPageOptions(node.page||''); $('diagramNodeShapeInput').value=node.style.shape||'rounded'; $('diagramNodeFillInput').value=node.style.fill||'#ffffff'; $('diagramNodeTextInput').value=node.style.text||'#111111'; $('diagramNodeBorderInput').value=node.style.border||'#111111'; $('diagramNodeWidthInput').value=Number(node.style.width||180); $('diagramNodeRadiusInput').value=Number(node.style.radius||0); $('diagramNodeFontInput').value=Number(node.style.fontSize||14); $('diagramNodeBoldInput').checked=node.style.bold!==false; $('diagramOpenPageBtn').disabled=!node.page;
+    }
+    if(edge){$('diagramEdgeLabelInput').value=edge.label||'';$('diagramEdgeStyleInput').value=edge.style||'solid';$('diagramEdgeColorInput').value=edge.color||'#777777';$('diagramEdgeArrowInput').checked=edge.arrow!==false;}
+  }
+
+  function refreshPageOptions(selected) {
+    var select=$('diagramNodePageInput'); if(!select)return;
+    var names=pageNames(); select.innerHTML='<option value="">No page assigned</option>';
+    names.forEach(function(name){var option=document.createElement('option');option.value=name;option.textContent=name;select.appendChild(option);});
+    if(selected&&!names.includes(selected)){var missing=document.createElement('option');missing.value=selected;missing.textContent=selected+' (missing)';select.appendChild(missing);}
+    select.value=selected||'';
+  }
+
+  function mermaidEscape(value) { return String(value == null ? '' : value).replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\n/g,'<br/>'); }
+  function mermaidNodeId(node,index) { if(node&&/^[A-Za-z_][A-Za-z0-9_-]*$/.test(String(node.mermaidId||'')))return String(node.mermaidId);var safe=String(node.id||'').replace(/[^A-Za-z0-9_]/g,'_'); return safe ? ('N_'+safe) : ('N'+(index+1)); }
+  function mermaidShape(id,label,shape) {
+    if(shape==='diamond')return id+'{"'+label+'"}';
+    if(shape==='circle')return id+'(("'+label+'"))';
+    if(shape==='pill')return id+'(["'+label+'"])';
+    if(shape==='rounded')return id+'("'+label+'")';
+    return id+'["'+label+'"]';
+  }
+
+  function toMermaid(diagram) {
+    if(!diagram)return 'flowchart TD\n  EMPTY["Create a diagram"]';
+    var lines=['flowchart TD']; var ids={};
+    diagram.nodes.forEach(function(node,index){var id=mermaidNodeId(node,index);ids[node.id]=id;var label=mermaidEscape(node.title||'Node');if(node.subtitle)label+='<br/>'+mermaidEscape(node.subtitle);lines.push('  '+mermaidShape(id,label,node.style.shape));});
+    diagram.edges.forEach(function(edge){if(!ids[edge.from]||!ids[edge.to])return;var arrow=edge.style==='dashed'?'-.->':'-->';var label=edge.label?'|'+mermaidEscape(edge.label).replace(/\|/g,'/')+'|':'';lines.push('  '+ids[edge.from]+' '+arrow+label+' '+ids[edge.to]);});
+    diagram.nodes.forEach(function(node){var id=ids[node.id];if(!id)return;lines.push('  style '+id+' fill:'+String(node.style.fill||'#ffffff')+',stroke:'+String(node.style.border||'#111111')+',color:'+String(node.style.text||'#111111')+',stroke-width:1px');if(node.page)lines.push('  click '+id+' "'+mermaidEscape(node.page)+'" "Open '+mermaidEscape(node.page)+'"');});
+    return lines.join('\n');
+  }
+
+  function mermaidStatus(message, error) {
+    var status = $('diagramMermaidStatus');
+    if (!status) return;
+    status.textContent = message || '';
+    status.classList.toggle('error', !!error);
+    status.classList.toggle('success', !error && !!message);
+  }
+
+  function mermaidLabelParts(label) {
+    var text = String(label == null ? '' : label)
+      .replace(/^\s*["']|["']\s*$/g, '')
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .replace(/<br\s*\/?>/gi, '\n');
+    var parts = text.split('\n');
+    return { title: clean(parts.shift() || 'Node'), subtitle: clean(parts.join(' ')) };
+  }
+
+  function parseMermaidNodeToken(token) {
+    token = clean(String(token || '').replace(/;\s*$/, ''));
+    var patterns = [
+      { re: /^([A-Za-z_][A-Za-z0-9_-]*)\s*\(\(\s*([\s\S]*?)\s*\)\)$/, shape: 'circle', type: 'touchpoint' },
+      { re: /^([A-Za-z_][A-Za-z0-9_-]*)\s*\(\[\s*([\s\S]*?)\s*\]\)$/, shape: 'pill', type: 'terminal' },
+      { re: /^([A-Za-z_][A-Za-z0-9_-]*)\s*\{\s*([\s\S]*?)\s*\}$/, shape: 'diamond', type: 'decision' },
+      { re: /^([A-Za-z_][A-Za-z0-9_-]*)\s*\(\s*([\s\S]*?)\s*\)$/, shape: 'rounded', type: 'screen' },
+      { re: /^([A-Za-z_][A-Za-z0-9_-]*)\s*\[\s*([\s\S]*?)\s*\]$/, shape: 'rectangle', type: 'section' },
+      { re: /^([A-Za-z_][A-Za-z0-9_-]*)$/, shape: 'rounded', type: 'screen' }
+    ];
+    for (var i = 0; i < patterns.length; i++) {
+      var match = token.match(patterns[i].re);
+      if (!match) continue;
+      var label = match.length > 2 ? mermaidLabelParts(match[2]) : { title: match[1], subtitle: '' };
+      return { mermaidId: match[1], title: label.title || match[1], subtitle: label.subtitle, shape: patterns[i].shape, type: patterns[i].type };
+    }
+    return null;
+  }
+
+  function normalizeHexColor(value, fallback) {
+    value = clean(value);
+    var short = value.match(/^#([0-9a-f]{3})$/i);
+    if (short) return '#' + short[1].split('').map(function (c) { return c + c; }).join('');
+    return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+  }
+
+  function layoutMermaidDiagram(diagram, direction, preserved) {
+    preserved = preserved || {};
+    var movable = diagram.nodes.filter(function (node) { return !preserved[node.id]; });
+    if (!movable.length) return;
+    var allNew = movable.length === diagram.nodes.length;
+    if (!allNew) {
+      var startX = 180, startY = 180;
+      diagram.nodes.forEach(function (node) {
+        if (!preserved[node.id]) {
+          node.x = startX;
+          node.y = startY;
+          startX += 260;
+          if (startX > 1400) { startX = 180; startY += 180; }
+        }
+      });
+      return;
+    }
+    var incoming = {}, outgoing = {};
+    diagram.nodes.forEach(function (node) { incoming[node.id] = 0; outgoing[node.id] = []; });
+    diagram.edges.forEach(function (edge) {
+      if (incoming[edge.to] != null) incoming[edge.to]++;
+      if (outgoing[edge.from]) outgoing[edge.from].push(edge.to);
+    });
+    var queue = diagram.nodes.filter(function (node) { return incoming[node.id] === 0; }).map(function (node) { return node.id; });
+    if (!queue.length && diagram.nodes.length) queue = [diagram.nodes[0].id];
+    var level = {}, seen = {};
+    queue.forEach(function (id) { level[id] = 0; seen[id] = true; });
+    for (var qi = 0; qi < queue.length; qi++) {
+      var id = queue[qi];
+      (outgoing[id] || []).forEach(function (next) {
+        level[next] = Math.max(level[next] || 0, (level[id] || 0) + 1);
+        if (!seen[next]) { seen[next] = true; queue.push(next); }
+      });
+    }
+    diagram.nodes.forEach(function (node) { if (level[node.id] == null) level[node.id] = 0; });
+    var groups = {};
+    diagram.nodes.forEach(function (node) { (groups[level[node.id]] || (groups[level[node.id]] = [])).push(node); });
+    Object.keys(groups).sort(function (a,b) { return Number(a)-Number(b); }).forEach(function (key) {
+      groups[key].forEach(function (node, index) {
+        if (direction === 'LR' || direction === 'RL') {
+          node.x = 220 + Number(key) * 360;
+          node.y = 180 + index * 200;
+        } else {
+          node.x = 220 + index * 330;
+          node.y = 180 + Number(key) * 230;
+        }
+      });
+    });
+  }
+
+  function parseMermaidFlowchart(source, current) {
+    var rawLines = String(source || '').replace(/\r/g, '').split('\n');
+    var lines = rawLines.map(function (line) { return line.replace(/%%.*$/, '').trim(); }).filter(Boolean);
+    if (!lines.length) throw new Error('Paste a Mermaid flowchart TD first.');
+    var header = lines.shift().match(/^(?:flowchart|graph)\s+(TD|TB|LR|RL|BT)\s*;?$/i);
+    if (!header) throw new Error('Mermaid source must start with “flowchart TD”.');
+    var direction = String(header[1] || 'TD').toUpperCase();
+    var existing = {}, preserved = {};
+    if (current) current.nodes.forEach(function (node, index) { existing[mermaidNodeId(node,index)] = node; });
+    var nodeDefs = {}, nodeOrder = [], edgeDefs = [], styles = {}, clicks = {};
+
+    function ensureToken(token) {
+      var parsed = parseMermaidNodeToken(token);
+      if (!parsed) throw new Error('Could not parse node: ' + token);
+      var existingDef = nodeDefs[parsed.mermaidId];
+      if (!existingDef) {
+        nodeOrder.push(parsed.mermaidId);
+        nodeDefs[parsed.mermaidId] = parsed;
+      } else if (clean(token) !== parsed.mermaidId) {
+        nodeDefs[parsed.mermaidId] = Object.assign(existingDef, parsed);
+      }
+      return parsed.mermaidId;
+    }
+
+    lines.forEach(function (line) {
+      line = line.replace(/;\s*$/, '').trim();
+      if (!line || /^(classDef|class|linkStyle|subgraph|end\b)/i.test(line)) return;
+      var styleMatch = line.match(/^style\s+([A-Za-z_][A-Za-z0-9_-]*)\s+(.+)$/i);
+      if (styleMatch) { styles[styleMatch[1]] = styleMatch[2]; return; }
+      var clickMatch = line.match(/^click\s+([A-Za-z_][A-Za-z0-9_-]*)\s+["']([^"']+)["']/i);
+      if (clickMatch) { clicks[clickMatch[1]] = clickMatch[2]; return; }
+
+      var arrowIndex = line.indexOf('-.->');
+      var arrow = '-.->';
+      if (arrowIndex < 0) { arrowIndex = line.indexOf('-->'); arrow = '-->'; }
+      if (arrowIndex >= 0) {
+        var left = line.slice(0, arrowIndex).trim();
+        var right = line.slice(arrowIndex + arrow.length).trim();
+        var label = '';
+        if (right.charAt(0) === '|') {
+          var end = right.indexOf('|', 1);
+          if (end > 0) { label = right.slice(1, end); right = right.slice(end + 1).trim(); }
+        }
+        var fromId = ensureToken(left);
+        var toId = ensureToken(right);
+        edgeDefs.push({ from: fromId, to: toId, label: clean(label), style: arrow === '-.->' ? 'dashed' : 'solid' });
+        return;
+      }
+      ensureToken(line);
+    });
+
+    if (!nodeOrder.length) throw new Error('No Mermaid nodes were found.');
+    var diagram = blankDiagram(current && current.type || 'blank', current && current.name || 'Mermaid Diagram');
+    if (current) {
+      diagram.id = current.id;
+      diagram.createdAt = current.createdAt;
+      diagram.updatedAt = current.updatedAt;
+      diagram.settings = Object.assign(diagram.settings, current.settings || {});
+    }
+    var idMap = {};
+    nodeOrder.forEach(function (mid, index) {
+      var def = nodeDefs[mid];
+      var prior = existing[mid];
+      var node;
+      if (prior) {
+        node = JSON.parse(JSON.stringify(prior));
+        preserved[node.id] = true;
+      } else {
+        node = nodeFrom(def.type || 'screen', 220 + (index % 4) * 300, 180 + Math.floor(index / 4) * 190);
+      }
+      node.mermaidId = mid;
+      node.type = def.type || node.type || 'screen';
+      node.title = def.title || mid;
+      node.subtitle = def.subtitle || '';
+      node.style.shape = def.shape || node.style.shape || 'rounded';
+      node.page = clicks[mid] || '';
+      var styleText = styles[mid] || '';
+      styleText.split(',').forEach(function (pair) {
+        var split = pair.split(':');
+        var key = clean(split.shift()).toLowerCase();
+        var value = clean(split.join(':'));
+        if (key === 'fill') node.style.fill = normalizeHexColor(value, node.style.fill);
+        else if (key === 'stroke') node.style.border = normalizeHexColor(value, node.style.border);
+        else if (key === 'color') node.style.text = normalizeHexColor(value, node.style.text);
+      });
+      diagram.nodes.push(node);
+      idMap[mid] = node.id;
+    });
+    edgeDefs.forEach(function (edge) {
+      if (!idMap[edge.from] || !idMap[edge.to]) return;
+      var priorEdge = current && current.edges && current.edges.find(function (item) {
+        var fromNode = current.nodes.find(function (node, index) { return mermaidNodeId(node,index) === edge.from; });
+        var toNode = current.nodes.find(function (node, index) { return mermaidNodeId(node,index) === edge.to; });
+        return fromNode && toNode && item.from === fromNode.id && item.to === toNode.id;
+      });
+      diagram.edges.push({ id: priorEdge ? priorEdge.id : uid('edge'), from: idMap[edge.from], to: idMap[edge.to], label: edge.label, style: edge.style, color: priorEdge ? priorEdge.color : '#777777', arrow: priorEdge ? priorEdge.arrow !== false : true });
+    });
+    layoutMermaidDiagram(diagram, direction, preserved);
+    return diagram;
+  }
+
+  function applyMermaidSource(source) {
+    var current = activeDiagram();
+    if (!current) { createDiagram('blank'); current = activeDiagram(); }
+    var parsed = parseMermaidFlowchart(source, current);
+    var index = state.diagrams.indexOf(current);
+    if (index >= 0) state.diagrams[index] = parsed;
+    state.activeDiagramId = parsed.id;
+    state.selectedNodeId = '';
+    state.selectedEdgeId = '';
+    state.connectSourceId = '';
+    renderDiagramList();
+    renderBoard();
+    renderInspector();
+    updateConnectButtons();
+    updateCanvasIdentity();
+    mermaidStatus('Live sync applied · ' + parsed.nodes.length + ' nodes · ' + parsed.edges.length + ' connections', false);
+    markDirty();
+  }
+
+  function scheduleMermaidApply() {
+    state.mermaidEditing = true;
+    if (state.mermaidTimer) window.clearTimeout(state.mermaidTimer);
+    state.mermaidTimer = window.setTimeout(function () {
+      state.mermaidTimer = 0;
+      var output = $('diagramMermaidOutput');
+      if (!output) return;
+      try { applyMermaidSource(output.value); }
+      catch (error) { mermaidStatus(String(error && error.message || error || 'Mermaid parse error.'), true); }
+    }, 420);
+  }
+
+  function renderMermaid() {
+    var output = $('diagramMermaidOutput');
+    if (!output) return;
+    if (state.mermaidEditing && document.activeElement === output) return;
+    output.value = toMermaid(activeDiagram());
+    mermaidStatus('Live sync ready · edit or paste flowchart TD.', false);
+  }
+
+  function renderAll() { renderDiagramList(); renderBoard(); renderInspector(); renderMermaid(); updateConnectButtons(); }
+
+  function createDiagram(type) {
+    var d=templateDiagram(type||($('diagramTypeInput')?$('diagramTypeInput').value:'ia'));
+    state.diagrams.push(d);state.activeDiagramId=d.id;state.selectedNodeId='';state.selectedEdgeId='';state.connectSourceId='';renderAll();markDirty();
+    if(state.active) centerBoard();
+  }
+
+  function duplicateDiagram() {
+    var current=activeDiagram();if(!current)return;
+    var copy=JSON.parse(JSON.stringify(current));copy.id=uid('diagram');copy.name=current.name+' Copy';copy.createdAt=now();copy.updatedAt=now();
+    var nodeMap={};copy.nodes.forEach(function(n){var old=n.id;n.id=uid('node');nodeMap[old]=n.id;n.x+=30;n.y+=30;});copy.edges.forEach(function(e){e.id=uid('edge');e.from=nodeMap[e.from]||e.from;e.to=nodeMap[e.to]||e.to;});
+    state.diagrams.push(copy);state.activeDiagramId=copy.id;state.selectedNodeId='';state.selectedEdgeId='';renderAll();markDirty();
+  }
+
+  function deleteDiagram() {
+    var d=activeDiagram();if(!d)return;if(!window.confirm('Delete "'+d.name+'"?'))return;
+    state.diagrams=state.diagrams.filter(function(item){return item.id!==d.id});state.activeDiagramId=state.diagrams[0]?state.diagrams[0].id:'';state.selectedNodeId='';state.selectedEdgeId='';state.connectSourceId='';renderAll();markDirty();
+  }
+
+  function boardPoint(clientX,clientY) { var board=$('diagramBoard');var rect=board.getBoundingClientRect();var zoom=getDiagramZoom();return{x:clamp((clientX-rect.left)/zoom,0,board.clientWidth-40),y:clamp((clientY-rect.top)/zoom,0,board.clientHeight-40)}; }
+  function snap(value) { var d=activeDiagram();return d&&d.settings.snap?Math.round(value/20)*20:value; }
+
+  function addNode(type,x,y) {
+    var d=activeDiagram();if(!d){createDiagram('blank');d=activeDiagram();}
+    if(x==null||y==null){var scroll=$('diagramBoardScroll'),zoom=getDiagramZoom();x=(scroll?(scroll.scrollLeft+scroll.clientWidth/2)/zoom:500)-90;y=(scroll?(scroll.scrollTop+scroll.clientHeight/2)/zoom:300)-50;}
+    var n=nodeFrom(type,snap(x),snap(y));d.nodes.push(n);state.selectedNodeId=n.id;state.selectedEdgeId='';renderAll();markDirty();return n;
+  }
+
+  function onNodeClick(event,nodeId) {
+    if(state.drag&&state.drag.moved)return;
+    if(state.connectSourceId&&state.connectSourceId!==nodeId){
+      var d=activeDiagram();if(d&&!d.edges.some(function(e){return e.from===state.connectSourceId&&e.to===nodeId;}))d.edges.push(edgeFrom(state.connectSourceId,nodeId));state.connectSourceId='';state.selectedNodeId=nodeId;state.selectedEdgeId='';renderAll();markDirty();event.stopPropagation();return;
+    }
+    state.selectedNodeId=nodeId;state.selectedEdgeId='';renderAll();event.stopPropagation();
+  }
+
+  function onNodePointerDown(event) {
+    if(event.button!==0)return;
+    var id=event.currentTarget.getAttribute('data-node-id');var node=activeDiagram()&&activeDiagram().nodes.find(function(n){return n.id===id});if(!node)return;
+    state.selectedNodeId=id;state.selectedEdgeId='';
+    state.drag={nodeId:id,startX:event.clientX,startY:event.clientY,nodeX:node.x,nodeY:node.y,moved:false};
+    event.currentTarget.setPointerCapture&&event.currentTarget.setPointerCapture(event.pointerId);renderInspector();
+  }
+
+  function onPointerMove(event) {
+    if(!state.drag)return;var d=activeDiagram();var node=d&&d.nodes.find(function(n){return n.id===state.drag.nodeId});if(!node)return;
+    var zoom=getDiagramZoom();var dx=(event.clientX-state.drag.startX)/zoom,dy=(event.clientY-state.drag.startY)/zoom;if(Math.abs(dx)+Math.abs(dy)>4)state.drag.moved=true;
+    node.x=snap(clamp(state.drag.nodeX+dx,0,(d.settings.canvasWidth||16000)-100));node.y=snap(clamp(state.drag.nodeY+dy,0,(d.settings.canvasHeight||10000)-60));renderBoard();
+  }
+  function onPointerUp(){if(!state.drag)return;var moved=state.drag.moved;state.drag=null;if(moved){renderAll();markDirty();}}
+
+  function beginConnect() {
+    var node=selectedNode();if(!node){plus.toast('Select the source node first.','error');return;}state.connectSourceId=node.id;renderAll();plus.toast('Connection mode: choose the destination node.');
+  }
+  function cancelConnect(){state.connectSourceId='';renderAll();}
+  function updateConnectButtons(){if($('diagramConnectBtn'))$('diagramConnectBtn').classList.toggle('active',!!state.connectSourceId);if($('diagramCancelConnectBtn'))$('diagramCancelConnectBtn').classList.toggle('hidden',!state.connectSourceId);}
+
+  function deleteNode() {
+    var d=activeDiagram(),n=selectedNode();if(!d||!n)return;d.nodes=d.nodes.filter(function(x){return x.id!==n.id});d.edges=d.edges.filter(function(e){return e.from!==n.id&&e.to!==n.id});state.selectedNodeId='';state.connectSourceId='';renderAll();markDirty();
+  }
+  function duplicateNode() {
+    var d=activeDiagram(),n=selectedNode();if(!d||!n)return;var copy=JSON.parse(JSON.stringify(n));copy.id=uid('node');copy.title=(n.title||'Node')+' Copy';copy.x=clamp(n.x+40,0,(d.settings.canvasWidth||16000)-100);copy.y=clamp(n.y+40,0,(d.settings.canvasHeight||10000)-60);d.nodes.push(copy);state.selectedNodeId=copy.id;renderAll();markDirty();
+  }
+  function deleteEdge(){var d=activeDiagram(),e=selectedEdge();if(!d||!e)return;d.edges=d.edges.filter(function(x){return x.id!==e.id});state.selectedEdgeId='';renderAll();markDirty();}
+
+  function updateSelectedNode() {
+    var n=selectedNode();if(!n)return;
+    n.title=String($('diagramNodeTitleInput').value||'').slice(0,220);n.subtitle=String($('diagramNodeSubtitleInput').value||'').slice(0,1200);n.page=$('diagramNodePageInput').value||'';
+    n.style.shape=$('diagramNodeShapeInput').value||'rounded';n.style.fill=$('diagramNodeFillInput').value||'#ffffff';n.style.text=$('diagramNodeTextInput').value||'#111111';n.style.border=$('diagramNodeBorderInput').value||'#111111';n.style.width=clamp(Number($('diagramNodeWidthInput').value||180),100,420);n.style.radius=clamp(Number($('diagramNodeRadiusInput').value||0),0,999);n.style.fontSize=clamp(Number($('diagramNodeFontInput').value||14),9,30);n.style.bold=$('diagramNodeBoldInput').checked;renderBoard();renderMermaid();markDirty();
+  }
+  function updateSelectedEdge() {var e=selectedEdge();if(!e)return;e.label=String($('diagramEdgeLabelInput').value||'').slice(0,300);e.style=$('diagramEdgeStyleInput').value==='dashed'?'dashed':'solid';e.color=$('diagramEdgeColorInput').value||'#777777';e.arrow=$('diagramEdgeArrowInput').checked;renderBoard();renderMermaid();markDirty();}
+
+  function autoLayout(direction) {
+    var d=activeDiagram();if(!d||!d.nodes.length)return;
+    if(direction==='grid'){
+      var cols=Math.max(2,Math.ceil(Math.sqrt(d.nodes.length)));d.nodes.forEach(function(n,i){n.x=100+(i%cols)*300;n.y=90+Math.floor(i/cols)*200;});renderAll();markDirty();return;
+    }
+    var incoming={},outgoing={};d.nodes.forEach(function(n){incoming[n.id]=0;outgoing[n.id]=[];});d.edges.forEach(function(e){if(incoming[e.to]!=null)incoming[e.to]++;if(outgoing[e.from])outgoing[e.from].push(e.to);});
+    var queue=d.nodes.filter(function(n){return incoming[n.id]===0;}).map(function(n){return n.id;});if(!queue.length)queue=[d.nodes[0].id];var levels={},seen={};queue.forEach(function(id){levels[id]=0;seen[id]=true;});
+    for(var qi=0;qi<queue.length;qi++){var id=queue[qi],level=levels[id]||0;(outgoing[id]||[]).forEach(function(next){levels[next]=Math.max(levels[next]||0,level+1);if(!seen[next]){seen[next]=true;queue.push(next);}});}
+    d.nodes.forEach(function(n){if(levels[n.id]==null)levels[n.id]=0;});var groups={};d.nodes.forEach(function(n){(groups[levels[n.id]]||(groups[levels[n.id]]=[])).push(n);});
+    Object.keys(groups).sort(function(a,b){return Number(a)-Number(b);}).forEach(function(key){groups[key].forEach(function(n,index){if(direction==='lr'){n.x=100+Number(key)*330;n.y=90+index*180;}else{n.x=100+index*300;n.y=80+Number(key)*210;}});});
+    renderAll();markDirty();centerBoard();
+  }
+
+  function centerBoard() { fitDiagramToViewport(); }
+
+  function copyText(text) {if(navigator.clipboard&&window.isSecureContext)return navigator.clipboard.writeText(text);var area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();var ok=document.execCommand('copy');area.remove();return ok?Promise.resolve():Promise.reject(new Error('Copy failed.'));}
+  function downloadText(text,name,type){var blob=new Blob([text],{type:type||'text/plain;charset=utf-8'});var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download=name;a.style.display='none';document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},5000);}
+
+  function isAppleTouchBrowser() {
+    var nav = window.navigator || {};
+    var platform = String(nav.platform || '');
+    var ua = String(nav.userAgent || '');
+    return /iPad|iPhone|iPod/i.test(ua) || (platform === 'MacIntel' && Number(nav.maxTouchPoints || 0) > 1);
+  }
+
+  function withDiagramTimeout(promise, ms, message) {
+    var timer;
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise(function (_, reject) {
+        timer = window.setTimeout(function () { reject(new Error(message || 'Operation timed out.')); }, ms);
+      })
+    ]).then(function (value) {
+      window.clearTimeout(timer);
+      return value;
+    }, function (error) {
+      window.clearTimeout(timer);
+      throw error;
+    });
+  }
+
+  function rendererSourceFromServer() {
+    if (!(window.google && google.script && google.script.run)) return Promise.reject(new Error('Apps Script PNG renderer proxy is unavailable.'));
+    return withDiagramTimeout(new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(function (source) { resolve(String(source || '')); })
+        .withFailureHandler(function (error) { reject(error instanceof Error ? error : new Error(String(error && error.message || error || 'Renderer proxy failed.'))); })
+        .htmlStudioGetPngRendererSource();
+    }), 15000, 'Apps Script PNG renderer proxy timed out.');
+  }
+
+  function rendererSourceFromBrowser() {
+    if (!window.fetch) return Promise.reject(new Error('Browser fetch is unavailable.'));
+    return withDiagramTimeout(
+      fetch(HTML2CANVAS_URL, { mode: 'cors', cache: 'force-cache', credentials: 'omit' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('PNG renderer returned HTTP ' + response.status + '.');
+          return response.text();
+        }),
+      9000,
+      'PNG renderer browser download timed out.'
+    );
+  }
+
+  function loadDiagramRendererSource() {
+    if (rendererSourcePromise) return rendererSourcePromise;
+    var primary = (window.google && google.script && google.script.run) ? rendererSourceFromServer() : rendererSourceFromBrowser();
+    rendererSourcePromise = primary.catch(function (serverError) {
+      console.warn('[HTML Studio Diagrams] Server renderer source failed; trying browser CDN.', serverError);
+      return rendererSourceFromBrowser();
+    }).then(function (source) {
+      if (!source || source.length < 10000 || source.indexOf('html2canvas') === -1) throw new Error('PNG renderer payload was invalid.');
+      return source;
+    });
+    return rendererSourcePromise;
+  }
+
+  function installDiagramRenderer(source) {
+    if (window.html2canvas) return window.html2canvas;
+    var script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.setAttribute('data-unscriptly-diagram-png-renderer', 'true');
+    script.text = String(source || '');
+    (document.head || document.documentElement).appendChild(script);
+    if (!window.html2canvas) {
+      script.remove();
+      throw new Error('PNG renderer loaded but did not initialize.');
+    }
+    script.remove();
+    return window.html2canvas;
+  }
+
+  function safeDiagramScale(width, height, requested) {
+    var appleTouch = isAppleTouchBrowser();
+    var maxPixels = appleTouch ? 8000000 : 18000000;
+    var maxDimension = appleTouch ? 6144 : 8192;
+    var scale = Number(requested || 1) || 1;
+    scale = Math.min(
+      scale,
+      maxDimension / Math.max(width, 1),
+      maxDimension / Math.max(height, 1),
+      Math.sqrt(maxPixels / Math.max(width * height, 1))
+    );
+    return Math.max(0.1, scale);
+  }
+
+  function diagramContentBounds(board) {
+    var bounds = diagramLogicalBounds();
+    var diagram = activeDiagram();
+    if (!diagram) return { x: 0, y: 0, width: 1, height: 1 };
+    var boardWidth = Math.max(1, Number(diagram.settings.canvasWidth || 16000));
+    var boardHeight = Math.max(1, Number(diagram.settings.canvasHeight || 10000));
+    return {
+      x: clamp(Math.floor(bounds.x), 0, boardWidth - 1),
+      y: clamp(Math.floor(bounds.y), 0, boardHeight - 1),
+      width: Math.max(1, Math.min(boardWidth - bounds.x, Math.ceil(bounds.width))),
+      height: Math.max(1, Math.min(boardHeight - bounds.y, Math.ceil(bounds.height)))
+    };
+  }
+
+  function cropDiagramCanvas(canvas, board, bounds) {
+    var boardWidth = Math.max(1, board.clientWidth || 1);
+    var boardHeight = Math.max(1, board.clientHeight || 1);
+    var scaleX = canvas.width / boardWidth;
+    var scaleY = canvas.height / boardHeight;
+    var sx = Math.max(0, Math.round(bounds.x * scaleX));
+    var sy = Math.max(0, Math.round(bounds.y * scaleY));
+    var sw = Math.max(1, Math.min(canvas.width - sx, Math.round(bounds.width * scaleX)));
+    var sh = Math.max(1, Math.min(canvas.height - sy, Math.round(bounds.height * scaleY)));
+    if (sx === 0 && sy === 0 && sw === canvas.width && sh === canvas.height) return canvas;
+    var cropped = document.createElement('canvas');
+    cropped.width = sw;
+    cropped.height = sh;
+    var ctx = cropped.getContext('2d');
+    if (!ctx) return canvas;
+    ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    return cropped;
+  }
+
+  function downscaleDiagramCanvas(canvas, maxPixels) {
+    var width = Number(canvas && canvas.width || 0);
+    var height = Number(canvas && canvas.height || 0);
+    var pixels = width * height;
+    if (!canvas || !width || !height || !pixels || pixels <= maxPixels) return canvas;
+    var ratio = Math.sqrt(maxPixels / pixels);
+    var reduced = document.createElement('canvas');
+    reduced.width = Math.max(1, Math.round(width * ratio));
+    reduced.height = Math.max(1, Math.round(height * ratio));
+    var ctx = reduced.getContext('2d');
+    if (!ctx) return canvas;
+    ctx.drawImage(canvas, 0, 0, reduced.width, reduced.height);
+    return reduced;
+  }
+
+  function encodeDiagramPngOnce(canvas) {
+    return new Promise(function (resolve, reject) {
+      if (!canvas) return reject(new Error('Diagram renderer returned no canvas.'));
+      if (!canvas.toBlob) {
+        try {
+          var data = canvas.toDataURL('image/png');
+          var raw = atob(data.split(',')[1]);
+          var bytes = new Uint8Array(raw.length);
+          for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+          resolve(new Blob([bytes], { type: 'image/png' }));
+        } catch (error) { reject(error); }
+        return;
+      }
+      canvas.toBlob(function (blob) {
+        blob ? resolve(blob) : reject(new Error('PNG conversion failed.'));
+      }, 'image/png');
+    });
+  }
+
+  function encodeDiagramPng(canvas) {
+    var first = isAppleTouchBrowser() ? downscaleDiagramCanvas(canvas, 8000000) : canvas;
+    var timeout = isAppleTouchBrowser() ? 42000 : 28000;
+    return withDiagramTimeout(encodeDiagramPngOnce(first), timeout, 'Diagram PNG encoding is taking longer than expected.').catch(function (firstError) {
+      console.warn('[HTML Studio Diagrams] First PNG encoding attempt failed; retrying at safer size.', firstError);
+      var retry = downscaleDiagramCanvas(first, isAppleTouchBrowser() ? 4500000 : 8000000);
+      return withDiagramTimeout(encodeDiagramPngOnce(retry), timeout + 8000, 'Diagram PNG encoding timed out after the reduced-size retry.');
+    });
+  }
+
+  function reserveDiagramDownloadWindow() {
+    if (!isAppleTouchBrowser()) return null;
+    try {
+      var popup = window.open('about:blank', '_blank');
+      if (popup && popup.document) {
+        popup.document.open();
+        popup.document.write('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Preparing diagram export…</title><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;color:#111"><strong>Preparing UnScriptly diagram export…</strong><p style="color:#666;line-height:1.5">This tab will update when your PNG is ready.</p></body>');
+        popup.document.close();
+      }
+      return popup;
+    } catch (_) { return null; }
+  }
+
+  function clearDiagramDownloadReady() {
+    var link = $('diagramPngDownloadReady');
+    if (link) { link.classList.add('hidden'); link.removeAttribute('href'); link.removeAttribute('download'); }
+    if (activeDiagramPngUrl) {
+      try { URL.revokeObjectURL(activeDiagramPngUrl); } catch (_) {}
+      activeDiagramPngUrl = '';
+    }
+  }
+
+  function downloadDiagramBlob(blob, filename, popup) {
+    clearDiagramDownloadReady();
+    var url = URL.createObjectURL(blob);
+    activeDiagramPngUrl = url;
+    var link = $('diagramPngDownloadReady');
+    if (link) {
+      link.href = url;
+      link.download = filename;
+      link.textContent = 'Download ' + filename;
+      link.classList.remove('hidden');
+    }
+
+    var a = document.createElement('a');
+    a.href = url; a.download = filename; a.rel = 'noopener'; a.style.display = 'none';
+    document.body.appendChild(a);
+    try { a.click(); } catch (_) {}
+    a.remove();
+
+    if (popup && !popup.closed) {
+      try {
+        var safeFile = String(filename || 'diagram.png').replace(/[&<>\"]/g, function (ch) { return ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;'; });
+        var safeUrl = String(url).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        popup.document.open();
+        popup.document.write('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagram export ready</title><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;color:#111"><strong>Your diagram PNG is ready.</strong><p style="color:#666;line-height:1.5">If the file does not start automatically, tap the button below.</p><p><a id="d" href="' + safeUrl + '" download="' + safeFile + '" style="display:inline-block;padding:12px 16px;border-radius:10px;background:#111;color:#fff;text-decoration:none;font-weight:700">Download ' + safeFile + '</a></p><script>setTimeout(function(){try{document.getElementById(\'d\').click()}catch(e){}},80);<\/script></body>');
+        popup.document.close();
+      } catch (_) {
+        try { popup.location.href = url; } catch (__) {}
+      }
+    }
+
+    window.setTimeout(function () {
+      if (activeDiagramPngUrl === url) {
+        try { URL.revokeObjectURL(url); } catch (_) {}
+        activeDiagramPngUrl = '';
+      }
+    }, 120000);
+  }
+
+  function openDiagramPngModal() {
+    var diagram = activeDiagram();
+    if (!diagram) { plus.toast('Create or select a diagram before exporting PNG.', 'error'); return; }
+    clearDiagramDownloadReady();
+    if ($('diagramPngProgress')) $('diagramPngProgress').textContent = '';
+    if ($('diagramPngModal')) $('diagramPngModal').classList.remove('hidden');
+  }
+
+  function exportDiagramPng() {
+    var diagram = activeDiagram();
+    var board = $('diagramBoard');
+    var button = $('diagramPngExportConfirmBtn');
+    if (!diagram || !board || !button) { plus.toast('Diagram PNG export is unavailable.', 'error'); return; }
+
+    var scope = $('diagramPngScopeInput') ? $('diagramPngScopeInput').value : 'content';
+    var background = $('diagramPngBackgroundInput') ? $('diagramPngBackgroundInput').value : 'transparent';
+    var requestedScale = Number($('diagramPngScaleInput') ? $('diagramPngScaleInput').value : 2) || 2;
+    var popup = reserveDiagramDownloadWindow();
+    var oldText = button.textContent;
+    var boardWidth = Math.max(1, board.clientWidth || Number(diagram.settings.canvasWidth || 16000));
+    var boardHeight = Math.max(1, board.clientHeight || Number(diagram.settings.canvasHeight || 10000));
+    var scale = safeDiagramScale(boardWidth, boardHeight, requestedScale);
+    var bounds = scope === 'canvas' ? { x: 0, y: 0, width: boardWidth, height: boardHeight } : diagramContentBounds(board);
+
+    button.disabled = true;
+    button.textContent = 'Rendering…';
+    if ($('diagramPngProgress')) $('diagramPngProgress').textContent = 'Rendering full diagram…';
+    clearDiagramDownloadReady();
+
+    if (scale + 0.01 < requestedScale) plus.toast('PNG scale was reduced automatically to stay within this device’s image limits.');
+
+    loadDiagramRendererSource().then(function (source) {
+      var renderer = installDiagramRenderer(source);
+      return withDiagramTimeout(renderer(board, {
+        backgroundColor: background === 'white' ? '#ffffff' : null,
+        logging: false,
+        useCORS: true,
+        allowTaint: false,
+        foreignObjectRendering: false,
+        scale: scale,
+        width: boardWidth,
+        height: boardHeight,
+        windowWidth: Math.max(boardWidth, document.documentElement.clientWidth || boardWidth),
+        windowHeight: Math.max(boardHeight, document.documentElement.clientHeight || boardHeight),
+        scrollX: 0,
+        scrollY: 0,
+        imageTimeout: 2500,
+        removeContainer: true,
+        onclone: function (clonedDoc) {
+          try {
+            var clonedBoard = clonedDoc.getElementById('diagramBoard');
+            if (!clonedBoard) return;
+            clonedBoard.style.transform = 'none';
+            clonedBoard.style.transformOrigin = '0 0';
+            clonedBoard.style.backgroundImage = 'none';
+            clonedBoard.style.backgroundColor = background === 'white' ? '#ffffff' : 'transparent';
+            clonedBoard.style.border = '0';
+            clonedBoard.style.boxShadow = 'none';
+            qsa('.diagram-node.selected,.diagram-node.connect-source', clonedBoard).forEach(function (node) { node.classList.remove('selected', 'connect-source'); });
+            qsa('.diagram-edge-group.selected', clonedBoard).forEach(function (node) { node.classList.remove('selected'); });
+            var hint = clonedBoard.querySelector('.diagram-empty-hint');
+            if (hint && diagram.nodes.length) hint.remove();
+          } catch (_) {}
+        }
+      }), 32000, 'Diagram PNG rendering timed out.');
+    }).then(function (canvas) {
+      if ($('diagramPngProgress')) $('diagramPngProgress').textContent = 'Cropping diagram…';
+      return cropDiagramCanvas(canvas, board, bounds);
+    }).then(function (canvas) {
+      if ($('diagramPngProgress')) $('diagramPngProgress').textContent = 'Encoding PNG…';
+      return encodeDiagramPng(canvas);
+    }).then(function (blob) {
+      var filename = safeName(diagram.name, 'diagram') + '.png';
+      downloadDiagramBlob(blob, filename, popup);
+      if ($('diagramPngProgress')) $('diagramPngProgress').textContent = 'PNG ready. If it did not download automatically, use the download button above.';
+      plus.toast('Diagram PNG exported.');
+    }).catch(function (error) {
+      if (popup && !popup.closed) { try { popup.close(); } catch (_) {} }
+      console.error('[HTML Studio Diagrams] PNG export failed:', error);
+      if ($('diagramPngProgress')) $('diagramPngProgress').textContent = String(error && error.message || error || 'Diagram PNG export failed.');
+      plus.toast(String(error && error.message || error || 'Diagram PNG export failed.'), 'error');
+    }).then(function () {
+      button.disabled = false;
+      button.textContent = oldText || 'Export PNG';
+    });
+  }
+
+  function enterDiagramMode() {
+    if(state.active)return;state.active=true;
+    state.uiSnapshot={emptyHidden:$('emptyState').classList.contains('hidden'),previewHidden:$('previewShell').classList.contains('hidden'),inspectorEmptyHidden:$('inspectorEmpty').classList.contains('hidden'),inspectorContentHidden:$('inspectorContent').classList.contains('hidden'),pageLabel:$('currentPageLabel').textContent,viewport:$('viewportLabel').textContent};
+    $('emptyState').classList.add('hidden');$('previewShell').classList.add('hidden');$('loadingOverlay').classList.add('hidden');$('diagramWorkspace').classList.remove('hidden');
+    $('inspectorEmpty').classList.add('hidden');$('inspectorContent').classList.add('hidden');$('diagramInspector').classList.remove('hidden');
+    $('currentPageLabel').textContent='Diagram workspace';$('viewportLabel').textContent='No-code canvas';
+    if(!state.diagrams.length){$('diagramEmptyHint').textContent='Choose a diagram template, paste flowchart TD, or click New diagram.';}renderAll();applyDiagramZoom(false);
+  }
+  function exitDiagramMode() {
+    if(!state.active)return;state.active=false;$('diagramWorkspace').classList.add('hidden');$('diagramInspector').classList.add('hidden');
+    if(state.uiSnapshot){$('emptyState').classList.toggle('hidden',state.uiSnapshot.emptyHidden);$('previewShell').classList.toggle('hidden',state.uiSnapshot.previewHidden);$('inspectorEmpty').classList.toggle('hidden',state.uiSnapshot.inspectorEmptyHidden);$('inspectorContent').classList.toggle('hidden',state.uiSnapshot.inspectorContentHidden);$('currentPageLabel').textContent=state.uiSnapshot.pageLabel;$('viewportLabel').textContent=state.uiSnapshot.viewport;}else{if(plus.hasPage()){$('previewShell').classList.remove('hidden');$('emptyState').classList.add('hidden');}else{$('emptyState').classList.remove('hidden');$('previewShell').classList.add('hidden');}}
+    state.uiSnapshot=null;
+  }
+
+  function bindPalette() {
+    qsa('[data-diagram-node]').forEach(function(button){
+      button.addEventListener('dragstart',function(event){event.dataTransfer.setData('text/x-unscriptly-diagram-node',button.getAttribute('data-diagram-node'));event.dataTransfer.effectAllowed='copy';});
+      button.addEventListener('click',function(){addNode(button.getAttribute('data-diagram-node'));});
+    });
+    var board=$('diagramBoard');
+    board.addEventListener('dragover',function(event){if(event.dataTransfer.types&&Array.prototype.indexOf.call(event.dataTransfer.types,'text/x-unscriptly-diagram-node')>=0){event.preventDefault();event.dataTransfer.dropEffect='copy';}});
+    board.addEventListener('drop',function(event){var type=event.dataTransfer.getData('text/x-unscriptly-diagram-node');if(!type)return;event.preventDefault();var p=boardPoint(event.clientX,event.clientY);addNode(type,p.x-90,p.y-40);});
+    board.addEventListener('click',function(){state.selectedNodeId='';state.selectedEdgeId='';renderAll();});
+  }
+
+  function bindInspector() {
+    ['diagramNodeTitleInput','diagramNodeSubtitleInput','diagramNodePageInput','diagramNodeShapeInput','diagramNodeFillInput','diagramNodeTextInput','diagramNodeBorderInput','diagramNodeWidthInput','diagramNodeRadiusInput','diagramNodeFontInput','diagramNodeBoldInput'].forEach(function(id){var el=$(id);if(el)el.addEventListener(el.type==='text'||el.tagName==='TEXTAREA'?'input':'change',updateSelectedNode);});
+    ['diagramEdgeLabelInput','diagramEdgeStyleInput','diagramEdgeColorInput','diagramEdgeArrowInput'].forEach(function(id){var el=$(id);if(el)el.addEventListener(el.type==='text'?'input':'change',updateSelectedEdge);});
+    $('diagramOpenPageBtn').addEventListener('click',function(){var n=selectedNode();if(n&&n.page&&!activatePage(n.page))plus.toast('Assigned page is not currently loaded.','error');});
+    $('duplicateDiagramNodeBtn').addEventListener('click',duplicateNode);$('deleteDiagramNodeBtn').addEventListener('click',deleteNode);$('deleteDiagramEdgeBtn').addEventListener('click',deleteEdge);
+  }
+
+  function bindUi() {
+    $('createDiagramBtn').addEventListener('click',function(){createDiagram($('diagramTypeInput').value||'ia');});$('duplicateDiagramBtn').addEventListener('click',duplicateDiagram);$('deleteDiagramBtn').addEventListener('click',deleteDiagram);
+    $('diagramNameInput').addEventListener('input',function(){var d=activeDiagram();if(!d)return;d.name=String(this.value||'Untitled Diagram').slice(0,180);if($('diagramCanvasTitle'))$('diagramCanvasTitle').textContent=d.name;renderDiagramList();markDirty();});
+    $('diagramAddNodeBtn').addEventListener('click',function(){addNode('screen');});$('diagramConnectBtn').addEventListener('click',beginConnect);$('diagramCancelConnectBtn').addEventListener('click',cancelConnect);
+    $('diagramAutoTdBtn').addEventListener('click',function(){autoLayout('td');});$('diagramAutoLrBtn').addEventListener('click',function(){autoLayout('lr');});$('diagramAutoGridBtn').addEventListener('click',function(){autoLayout('grid');});$('diagramFitBtn').addEventListener('click',fitDiagramToViewport);
+    if($('diagramFitToolbarBtn'))$('diagramFitToolbarBtn').addEventListener('click',fitDiagramToViewport);
+    if($('diagramZoomOutBtn'))$('diagramZoomOutBtn').addEventListener('click',function(){setDiagramZoom(getDiagramZoom()-0.1,true);});
+    if($('diagramZoomInBtn'))$('diagramZoomInBtn').addEventListener('click',function(){setDiagramZoom(getDiagramZoom()+0.1,true);});
+    if($('diagramZoomLabel'))$('diagramZoomLabel').addEventListener('click',function(){setDiagramZoom(1,true);});
+    if($('diagramInspectorToolbarBtn'))$('diagramInspectorToolbarBtn').addEventListener('click',function(){var root=document.documentElement;if(root.classList.contains('studio-inspector-collapsed')){var reopen=$('inspectorReopenBtn');if(reopen)reopen.click();}else{var close=$('inspectorCloseBtn');if(close)close.click();}});
+    $('diagramSnapInput').addEventListener('change',function(){var d=activeDiagram();if(d){d.settings.snap=this.checked;renderBoard();markDirty();}});
+    if($('diagramMermaidOutput')){
+      $('diagramMermaidOutput').addEventListener('focus',function(){state.mermaidEditing=true;});
+      $('diagramMermaidOutput').addEventListener('input',scheduleMermaidApply);
+      $('diagramMermaidOutput').addEventListener('blur',function(){state.mermaidEditing=false;if(state.mermaidTimer){window.clearTimeout(state.mermaidTimer);state.mermaidTimer=0;try{applyMermaidSource(this.value);}catch(error){mermaidStatus(String(error&&error.message||error||'Mermaid parse error.'),true);return;}}renderMermaid();});
+    }
+    $('diagramExportPngBtn').addEventListener('click',openDiagramPngModal);
+    $('diagramPngExportConfirmBtn').addEventListener('click',exportDiagramPng);
+    $('copyDiagramMermaidBtn').addEventListener('click',function(){copyText(toMermaid(activeDiagram())).then(function(){plus.toast('Mermaid Flowchart TD copied.');}).catch(function(){plus.toast('Could not copy Mermaid automatically.','error');});});
+    $('downloadDiagramMermaidBtn').addEventListener('click',function(){var d=activeDiagram();if(!d)return;downloadText(toMermaid(d),safeName(d.name,'diagram')+'.mmd','text/plain;charset=utf-8');});
+    $('downloadDiagramJsonBtn').addEventListener('click',function(){var d=activeDiagram();if(!d)return;downloadText(JSON.stringify(d,null,2),safeName(d.name,'diagram')+'.json.txt','text/plain;charset=utf-8');});
+    document.addEventListener('htmlstudio:workspace-view',function(event){var view=event.detail&&event.detail.view;if(view==='diagrams')enterDiagramMode();else exitDiagramMode();});
+    window.addEventListener('pointermove',onPointerMove,true);window.addEventListener('pointerup',onPointerUp,true);
+    window.addEventListener('keydown',function(event){if(!state.active)return;var editing=document.activeElement&&['INPUT','TEXTAREA','SELECT'].indexOf(document.activeElement.tagName)>=0;if(editing)return;if(event.key==='Delete'||event.key==='Backspace'){if(selectedNode())deleteNode();else if(selectedEdge())deleteEdge();}if(event.key==='Escape')cancelConnect();},true);
+    if(window.MutationObserver&&$('pageList'))new MutationObserver(function(){var n=selectedNode();if(n)refreshPageOptions(n.page||'');}).observe($('pageList'),{childList:true,subtree:true,characterData:true});
+    bindPalette();bindInspector();
+  }
+
+  function exportProjectDiagrams(){return JSON.parse(JSON.stringify({schemaVersion:1,activeDiagramId:state.activeDiagramId,diagrams:state.diagrams}));}
+  function importProjectDiagrams(data){var normalized=normalizeProjectData(data||{});state.schemaVersion=1;state.activeDiagramId=normalized.activeDiagramId;state.diagrams=normalized.diagrams;state.selectedNodeId='';state.selectedEdgeId='';state.connectSourceId='';renderAll();}
+
+  function init() {
+    bindUi();
+    if(window.__HTML_STUDIO_PENDING_DIAGRAMS){importProjectDiagrams(window.__HTML_STUDIO_PENDING_DIAGRAMS);window.__HTML_STUDIO_PENDING_DIAGRAMS=null;}else renderAll();
+    setStatus('ready');
+  }
+
+  window.HTMLStudioDiagrams = {
+    exportProjectDiagrams: exportProjectDiagrams,
+    importProjectDiagrams: importProjectDiagrams,
+    getActive: function(){return activeDiagram()?JSON.parse(JSON.stringify(activeDiagram())):null;},
+    toMermaid: function(){return toMermaid(activeDiagram());},
+    exportPng: openDiagramPngModal,
+    create: createDiagram,
+    setZoom: setDiagramZoom,
+    fit: fitDiagramToViewport,
+    importMermaid: function(source){applyMermaidSource(source);},
+    enter: enterDiagramMode,
+    exit: exitDiagramMode,
+    open: function(){if(window.HTMLStudioModes&&typeof HTMLStudioModes.set==='function')HTMLStudioModes.set('diagram');else if(window.HTMLStudioWorkspace&&HTMLStudioWorkspace.show)HTMLStudioWorkspace.show('diagrams');}
+  };
+
+  try { init(); }
+  catch (error) { console.error('[HTML Studio] Diagram builder failed:',error);setStatus('error');plus.toast('Diagram builder could not initialize. Core HTML editing remains available.','error'); }
+})();
+</script>

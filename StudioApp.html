@@ -3,7 +3,7 @@
 <head>
   <base target="_top">
   <meta charset="utf-8">
-  <title>UnScriptly HTML Studio</title>
+  <title>UnScriptly Design Studio</title>
   <meta name="html-studio-build" content="<?= BUILD_ID ?>">
   <?!= studioIncludeRequired_('StudioStyles'); ?>
   <script>window.__HTML_STUDIO_CONFIG = <?!= APP_CONFIG_JSON ?>;</script>
@@ -15,33 +15,19 @@
         <button class="icon-btn" id="pagesToggleBtn" type="button" aria-label="Toggle workspace panel" title="Toggle workspace">☰</button>
         <div class="brand-mark" aria-hidden="true">U</div>
         <div>
-          <div class="brand-name">HTML Studio</div>
-          <div class="brand-sub">UnScriptly™ <span class="build-badge starting" id="buildStatusBadge" data-build="<?= BUILD_ID ?>">v8.12.0 · STARTING</span></div>
+          <div class="brand-name">Design Studio</div>
+          <div class="brand-sub">UnScriptly™ <span class="build-badge starting" id="buildStatusBadge" data-build="<?= BUILD_ID ?>">v8.14.0 · STARTING</span></div>
         </div>
       </div>
 
-      <div class="topbar-center">
-        <div class="mode-switch" role="group" aria-label="Preview mode">
-          <button id="selectModeBtn" class="seg-btn active" type="button">Select</button>
-          <button id="interactModeBtn" class="seg-btn" type="button">Interact</button>
+      <div class="topbar-center studio-mode-center">
+        <div class="studio-mode-switch" role="group" aria-label="Design Studio mode">
+          <button id="htmlStudioModeBtn" class="seg-btn active" type="button" aria-pressed="true">HTML</button>
+          <button id="diagramStudioModeBtn" class="seg-btn" type="button" aria-pressed="false">Diagram</button>
         </div>
-        <div class="divider-v"></div>
-        <div class="device-switch" role="group" aria-label="Device preview">
-          <button class="icon-btn device-btn active" data-device="desktop" type="button" title="Desktop">▱</button>
-          <button class="icon-btn device-btn" data-device="tablet" type="button" title="Tablet">▯</button>
-          <button class="icon-btn device-btn" data-device="mobile" type="button" title="Mobile">▯</button>
-        </div>
-        <div class="divider-v"></div>
-        <button class="icon-btn" id="undoBtn" type="button" title="Undo" disabled>↶</button>
-        <button class="icon-btn" id="redoBtn" type="button" title="Redo" disabled>↷</button>
       </div>
 
-      <div class="topbar-actions">
-        <button class="button ghost" id="previewModeBtn" type="button" title="Preview page without editor chrome">Preview</button>
-        <button class="button ghost" id="wireframeToggleBtn" type="button" aria-pressed="false" title="Toggle structural skeleton wireframe view">Wireframe</button>
-        <button class="button ghost" id="codeBtn" type="button">Code</button>
-        <button class="button ghost hide-small" id="copyBtn" type="button">Copy HTML</button>
-        <button class="button primary" id="exportBtn" type="button">Export</button>
+      <div class="topbar-actions global-topbar-actions">
         <button class="icon-btn" id="settingsBtn" type="button" aria-label="Global styles and settings" title="Global styles and settings">⚙</button>
         <button class="icon-btn mobile-only" id="inspectorToggleBtn" type="button" aria-label="Open inspector" title="Open inspector">▥</button>
       </div>
@@ -78,6 +64,7 @@
           <button class="library-tab" type="button" data-library-view="layers" role="tab" aria-selected="false">Layers</button>
           <button class="library-tab" type="button" data-library-view="elements" role="tab" aria-selected="false">Elements</button>
           <button class="library-tab" type="button" data-library-view="media" role="tab" aria-selected="false">Media</button>
+          <button class="library-tab studio-mode-legacy-map-tab hidden" type="button" data-library-view="diagrams" role="tab" aria-selected="false" tabindex="-1">Maps</button>
         </div>
 
         <div class="library-view" id="pagesLibraryView" data-library-panel="pages">
@@ -211,6 +198,81 @@
           </div>
         </div>
 
+        <div class="library-view hidden diagrams-library-view" id="diagramsLibraryView" data-library-panel="diagrams">
+          <div class="library-controls sticky-library-controls diagrams-controls">
+            <div class="section-title-row compact-title-row">
+              <div>
+                <label class="field-label no-margin" for="diagramTypeInput">Diagram builder</label>
+                <div class="field-help">Create IA, user flows, journey maps, sitemaps, service blueprints, and custom process maps.</div>
+              </div>
+            </div>
+            <label class="field-label" for="diagramNameInput">Diagram name</label>
+            <input id="diagramNameInput" class="field" type="text" placeholder="e.g. Student onboarding flow">
+            <label class="field-label" for="diagramTypeInput">Template</label>
+            <select id="diagramTypeInput" class="field" aria-label="Diagram template">
+              <option value="ia">Information Architecture</option>
+              <option value="user-flow">User Flow</option>
+              <option value="journey-map">Journey Map</option>
+              <option value="sitemap">Sitemap</option>
+              <option value="service-blueprint">Service Blueprint</option>
+              <option value="blank">Blank Diagram</option>
+            </select>
+            <div class="diagram-create-row">
+              <button class="button primary" id="createDiagramBtn" type="button">New diagram</button>
+              <button class="button secondary" id="duplicateDiagramBtn" type="button">Duplicate</button>
+            </div>
+          </div>
+
+          <div class="diagram-section">
+            <div class="element-group-title">Diagrams</div>
+            <div id="diagramList" class="diagram-list"></div>
+          </div>
+
+          <div class="diagram-section">
+            <div class="element-group-title">Drag elements</div>
+            <div class="diagram-palette-grid" id="diagramPalette">
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="screen"><span>▭</span><b>Page / Screen</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="section"><span>▤</span><b>Section</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="action"><span>→</span><b>Action</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="decision"><span>◇</span><b>Decision</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="terminal"><span>●</span><b>Start / End</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="stage"><span>▰</span><b>Journey Stage</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="touchpoint"><span>◎</span><b>Touchpoint</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="pain"><span>!</span><b>Pain Point</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="opportunity"><span>+</span><b>Opportunity</b></button>
+              <button class="diagram-palette-item" draggable="true" type="button" data-diagram-node="note"><span>≡</span><b>Note</b></button>
+            </div>
+            <div class="field-help">Drag an element onto the diagram canvas, or tap an element to add it near the center.</div>
+          </div>
+
+          <div class="diagram-section">
+            <div class="element-group-title">Canvas layout</div>
+            <div class="diagram-toolbar-grid">
+              <button class="button secondary" id="diagramAutoTdBtn" type="button">Auto TD</button>
+              <button class="button secondary" id="diagramAutoLrBtn" type="button">Auto LR</button>
+              <button class="button secondary" id="diagramAutoGridBtn" type="button">Grid</button>
+              <button class="button secondary" id="diagramFitBtn" type="button">Fit</button>
+            </div>
+            <label class="check-row"><input id="diagramSnapInput" type="checkbox" checked> Snap nodes to 20px grid</label>
+          </div>
+
+          <div class="diagram-section">
+            <div class="section-title-row compact-title-row">
+              <div class="element-group-title no-margin">Mermaid.js</div>
+              <span class="safe-pill">Flowchart TD</span>
+            </div>
+            <textarea id="diagramMermaidOutput" class="field diagram-mermaid-output" rows="12" spellcheck="false" placeholder="Paste flowchart TD here to generate or edit the diagram in real time…"></textarea>
+            <div class="field-help diagram-mermaid-help">Paste or edit <code>flowchart TD</code>. Valid changes are applied to the visual canvas automatically.</div>
+            <div class="diagram-mermaid-status" id="diagramMermaidStatus" aria-live="polite">Live sync ready.</div>
+            <div class="diagram-toolbar-grid">
+              <button class="button secondary" id="copyDiagramMermaidBtn" type="button">Copy Mermaid</button>
+              <button class="button secondary" id="downloadDiagramMermaidBtn" type="button">Download .mmd</button>
+              <button class="button secondary" id="downloadDiagramJsonBtn" type="button">Export JSON</button>
+              <button class="button danger" id="deleteDiagramBtn" type="button">Delete</button>
+            </div>
+          </div>
+        </div>
+
         <div class="library-view hidden" id="mediaLibraryView" data-library-panel="media">
           <div class="media-drive-box">
             <div class="element-group-title">Google Drive Media</div>
@@ -258,14 +320,57 @@
       </aside>
 
       <section class="canvas-area">
-        <div class="canvas-toolbar">
-          <div class="canvas-title-wrap">
+        <div class="canvas-toolbar html-mode-toolbar" id="htmlModeToolbar">
+          <div class="canvas-title-wrap html-mode-title">
             <span class="safe-pill">SANDBOXED</span>
             <span id="currentPageLabel">No page loaded</span>
           </div>
-          <div class="canvas-meta">
+          <div class="mode-toolbar-controls html-mode-controls">
+            <div class="mode-switch" role="group" aria-label="Preview interaction mode">
+              <button id="selectModeBtn" class="seg-btn active" type="button">Select</button>
+              <button id="interactModeBtn" class="seg-btn" type="button">Interact</button>
+            </div>
+            <div class="toolbar-separator"></div>
+            <div class="device-switch" role="group" aria-label="Device preview">
+              <button class="icon-btn device-btn active" data-device="desktop" type="button" title="Desktop">▱</button>
+              <button class="icon-btn device-btn" data-device="tablet" type="button" title="Tablet">▯</button>
+              <button class="icon-btn device-btn" data-device="mobile" type="button" title="Mobile">▯</button>
+            </div>
+            <button class="icon-btn" id="undoBtn" type="button" title="Undo" disabled>↶</button>
+            <button class="icon-btn" id="redoBtn" type="button" title="Redo" disabled>↷</button>
+            <button class="button ghost" id="previewModeBtn" type="button" title="Preview page without editor chrome">Preview</button>
+            <button class="button ghost" id="wireframeToggleBtn" type="button" aria-pressed="false" title="Toggle structural skeleton wireframe view">Wireframe</button>
+            <button class="button ghost" id="codeBtn" type="button">Code</button>
+            <button class="button ghost hide-small" id="copyBtn" type="button">Copy HTML</button>
+            <button class="button primary" id="exportBtn" type="button">Export</button>
+          </div>
+          <div class="canvas-meta html-mode-meta">
             <span id="viewportLabel">Responsive desktop</span>
             <button class="text-btn" id="refreshBtn" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="canvas-toolbar diagram-mode-toolbar hidden" id="diagramModeToolbar">
+          <div class="canvas-title-wrap diagram-mode-title">
+            <span class="safe-pill">DIAGRAM</span>
+            <strong id="diagramCanvasTitle">Untitled Diagram</strong>
+            <span id="diagramCanvasType">Information Architecture</span>
+          </div>
+          <div class="mode-toolbar-controls diagram-mode-controls">
+            <div class="diagram-zoom-controls" role="group" aria-label="Diagram zoom">
+              <button class="icon-btn" id="diagramZoomOutBtn" type="button" title="Zoom out">−</button>
+              <button class="diagram-zoom-label" id="diagramZoomLabel" type="button" title="Reset zoom to 100%">100%</button>
+              <button class="icon-btn" id="diagramZoomInBtn" type="button" title="Zoom in">＋</button>
+            </div>
+            <button class="button secondary" id="diagramFitToolbarBtn" type="button">Fit</button>
+            <button class="button secondary" id="diagramExportPngBtn" type="button">Export PNG</button>
+            <button class="button secondary" id="diagramAddNodeBtn" type="button">+ Node</button>
+            <button class="button secondary" id="diagramConnectBtn" type="button">Connect</button>
+            <button class="button secondary hidden" id="diagramCancelConnectBtn" type="button">Cancel connect</button>
+          </div>
+          <div class="canvas-meta diagram-mode-meta">
+            <span id="diagramCanvasMeta">No-code canvas</span>
+            <button class="text-btn" id="diagramInspectorToolbarBtn" type="button">Inspector</button>
           </div>
         </div>
 
@@ -292,6 +397,18 @@
                 referrerpolicy="no-referrer"
               ></iframe>
               <div class="review-notes-overlay hidden" id="reviewNotesOverlay" aria-label="Editor note markers"></div>
+            </div>
+          </div>
+
+          <div class="diagram-workspace hidden" id="diagramWorkspace" aria-label="No-code diagram canvas">
+            <div class="diagram-board-scroll" id="diagramBoardScroll">
+              <div class="diagram-board-zoom" id="diagramBoardZoom">
+                <div class="diagram-board" id="diagramBoard" tabindex="0">
+                  <svg class="diagram-edge-layer" id="diagramEdgeLayer" aria-hidden="true"></svg>
+                  <div class="diagram-node-layer" id="diagramNodeLayer"></div>
+                  <div class="diagram-empty-hint" id="diagramEmptyHint">Drag nodes here to start mapping.</div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -552,6 +669,65 @@
             </div>
           </section>
         </div>
+
+        <div id="diagramInspector" class="diagram-inspector hidden">
+          <div id="diagramInspectorEmpty" class="inspector-empty compact-diagram-empty">
+            <div class="cursor-glyph">↖</div>
+            <p>Select a node or connection to customize its content, style, page assignment, or relationship.</p>
+          </div>
+          <div id="diagramNodeInspector" class="hidden">
+            <section class="control-section">
+              <div class="section-body diagram-inspector-body">
+                <label class="field-label" for="diagramNodeTitleInput">Node title</label>
+                <input id="diagramNodeTitleInput" class="field" type="text" placeholder="Node title">
+                <label class="field-label" for="diagramNodeSubtitleInput">Description</label>
+                <textarea id="diagramNodeSubtitleInput" class="field" rows="3" placeholder="Optional supporting text"></textarea>
+                <label class="field-label" for="diagramNodePageInput">Assigned page / screen</label>
+                <select id="diagramNodePageInput" class="field"><option value="">No page assigned</option></select>
+                <button class="button secondary full-width-button" id="diagramOpenPageBtn" type="button">Open assigned page</button>
+              </div>
+            </section>
+            <section class="control-section">
+              <button class="section-toggle" type="button" data-toggle="diagramNodeStyleControls"><span>Node style</span><span>⌃</span></button>
+              <div class="section-body" id="diagramNodeStyleControls">
+                <label class="field-label" for="diagramNodeShapeInput">Shape</label>
+                <select id="diagramNodeShapeInput" class="field">
+                  <option value="rounded">Rounded</option><option value="rectangle">Rectangle</option><option value="pill">Pill</option><option value="diamond">Diamond</option><option value="circle">Circle</option>
+                </select>
+                <div class="field-grid two">
+                  <div><label class="field-label" for="diagramNodeFillInput">Fill</label><input id="diagramNodeFillInput" type="color" value="#ffffff"></div>
+                  <div><label class="field-label" for="diagramNodeTextInput">Text</label><input id="diagramNodeTextInput" type="color" value="#111111"></div>
+                </div>
+                <div class="field-grid two">
+                  <div><label class="field-label" for="diagramNodeBorderInput">Border</label><input id="diagramNodeBorderInput" type="color" value="#111111"></div>
+                  <div><label class="field-label" for="diagramNodeWidthInput">Width</label><input id="diagramNodeWidthInput" class="field" type="number" min="100" max="420" step="10"></div>
+                </div>
+                <div class="field-grid two">
+                  <div><label class="field-label" for="diagramNodeRadiusInput">Radius</label><input id="diagramNodeRadiusInput" class="field" type="number" min="0" max="999"></div>
+                  <div><label class="field-label" for="diagramNodeFontInput">Font size</label><input id="diagramNodeFontInput" class="field" type="number" min="9" max="30"></div>
+                </div>
+                <label class="check-row"><input id="diagramNodeBoldInput" type="checkbox" checked> Bold title</label>
+              </div>
+            </section>
+            <section class="control-section compact-actions">
+              <div class="action-row"><button class="button secondary grow" id="duplicateDiagramNodeBtn" type="button">Duplicate</button><button class="button danger grow" id="deleteDiagramNodeBtn" type="button">Delete</button></div>
+            </section>
+          </div>
+          <div id="diagramEdgeInspector" class="hidden">
+            <section class="control-section">
+              <div class="section-body diagram-inspector-body">
+                <label class="field-label" for="diagramEdgeLabelInput">Connection label</label>
+                <input id="diagramEdgeLabelInput" class="field" type="text" placeholder="e.g. Yes, Next, Submit">
+                <label class="field-label" for="diagramEdgeStyleInput">Line style</label>
+                <select id="diagramEdgeStyleInput" class="field"><option value="solid">Solid</option><option value="dashed">Dashed</option></select>
+                <label class="field-label" for="diagramEdgeColorInput">Color</label>
+                <input id="diagramEdgeColorInput" type="color" value="#777777">
+                <label class="check-row"><input id="diagramEdgeArrowInput" type="checkbox" checked> Arrow head</label>
+              </div>
+            </section>
+            <section class="control-section compact-actions"><button class="button danger full-width-button" id="deleteDiagramEdgeBtn" type="button">Delete connection</button></section>
+          </div>
+        </div>
       </aside>
     </main>
   </div>
@@ -661,7 +837,7 @@
         <div class="projects-loading hidden" id="projectsLoading">Loading projects…</div>
         <div class="projects-list" id="projectsList"></div>
         <div class="project-storage-note">
-          <span>Projects are stored under <strong>My Drive / UnScriptly HTML Studio / Projects</strong>.</span>
+          <span>Projects continue to use the legacy <strong>My Drive / UnScriptly HTML Studio / Projects</strong> storage path so existing projects remain compatible with Design Studio.</span>
           <a id="projectStorageLink" href="#" target="_blank" rel="noopener" class="text-link hidden">Open folder in Drive ↗</a>
         </div>
       </div>
@@ -879,6 +1055,29 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="diagramPngModal">
+    <div class="modal-card png-card diagram-png-card">
+      <div class="modal-head">
+        <div><div class="eyebrow">Diagram export</div><h2>Export diagram as PNG</h2></div>
+        <button class="icon-btn modal-close" data-close-modal="diagramPngModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-grid two">
+          <div><label class="field-label" for="diagramPngScopeInput">Export area</label><select id="diagramPngScopeInput" class="field"><option value="content">Full diagram content</option><option value="canvas">Entire canvas</option></select></div>
+          <div><label class="field-label" for="diagramPngBackgroundInput">Background</label><select id="diagramPngBackgroundInput" class="field"><option value="transparent">Transparent</option><option value="white">White</option></select></div>
+          <div><label class="field-label" for="diagramPngScaleInput">Quality</label><select id="diagramPngScaleInput" class="field"><option value="1">Standard · 1×</option><option value="2" selected>Retina · 2×</option><option value="3">High resolution · 3×</option></select></div>
+        </div>
+        <div class="png-note"><strong>Diagram PNG</strong><span>Exports the complete diagram, not just the visible viewport. Content mode crops to your nodes and connectors with safe padding. Transparent PNG is the default.</span></div>
+        <div class="png-progress" id="diagramPngProgress" aria-live="polite"></div>
+        <a class="button secondary hidden diagram-png-ready" id="diagramPngDownloadReady" href="#" download>Download generated PNG</a>
+      </div>
+      <div class="modal-foot">
+        <button class="button secondary modal-close" data-close-modal="diagramPngModal" type="button">Cancel</button>
+        <button class="button primary" id="diagramPngExportConfirmBtn" type="button">Export PNG</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="noteEditorModal">
     <div class="modal-card note-editor-card">
       <div class="modal-head">
@@ -949,6 +1148,8 @@
   <?!= studioIncludeOptional_('StudioReview', 'skeleton wireframe and editor notes'); ?>
   <?!= studioIncludeOptional_('StudioProjects', 'drive projects'); ?>
   <?!= studioIncludeOptional_('StudioWorkspace', 'workspace'); ?>
+  <?!= studioIncludeOptional_('StudioDiagrams', 'diagram builder'); ?>
+  <?!= studioIncludeOptional_('StudioModes', 'HTML and Diagram mode switcher'); ?>
   <?!= studioIncludeRequired_('StudioLayers'); ?>
   <?!= studioIncludeOptional_('StudioElements', 'elements'); ?>
   <?!= studioIncludeOptional_('StudioComponents', 'components library'); ?>
@@ -982,41 +1183,53 @@
       var linkingState = document.documentElement.getAttribute('data-html-studio-linking') || 'missing';
       var socialState = document.documentElement.getAttribute('data-html-studio-social') || 'missing';
       var elementExportState = document.documentElement.getAttribute('data-html-studio-element-export') || 'missing';
+      var diagramsState = document.documentElement.getAttribute('data-html-studio-diagrams') || 'missing';
+      var modesState = document.documentElement.getAttribute('data-design-studio-modes') || 'missing';
       var errors = window.__HTML_STUDIO_BOOT_ERRORS || [];
       if (ready && (layersState !== 'ready' || layerBridgeState !== 'ready') && !/ERROR/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.12.0 · LAYER SYNC NOT READY';
+        badge.textContent = 'v8.14.0 · LAYER SYNC NOT READY';
         badge.className = 'build-badge warn';
         badge.title = layerBridgeState !== 'ready' ? 'The layer preview bridge did not initialize.' : 'The Layers module did not initialize.';
         var layersEmpty = document.getElementById('layersEmptyState');
         if (layersEmpty) layersEmpty.textContent = 'Layers module did not initialize. Verify StudioLayers.html is installed, then redeploy.';
       }
       if (ready && (reviewBridgeState !== 'ready' || reviewState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.12.0 · REVIEW TOOLS NOT READY';
+        badge.textContent = 'v8.14.0 · REVIEW TOOLS NOT READY';
         badge.className = 'build-badge warn';
         badge.title = reviewBridgeState !== 'ready' ? 'The wireframe/notes preview bridge did not initialize.' : 'The wireframe/notes module did not initialize.';
       }
       if (ready && (componentsState !== 'ready' || galleryState !== 'ready' || mediaState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.12.0 · LIBRARIES NOT READY';
+        badge.textContent = 'v8.14.0 · LIBRARIES NOT READY';
         badge.className = 'build-badge warn';
         badge.title = componentsState !== 'ready' ? 'The Components library did not initialize.' : (mediaState !== 'ready' ? 'The Google Drive Media Library did not initialize.' : 'Gallery / Slideshow did not initialize.');
       }
       if (ready && githubState !== 'ready' && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.12.0 · GITHUB MODULE NOT READY';
+        badge.textContent = 'v8.14.0 · GITHUB MODULE NOT READY';
         badge.className = 'build-badge warn';
         badge.title = 'The GitHub integration module did not initialize. Core editing remains available.';
       }
       if (ready && (linkingState !== 'ready' || socialState !== 'ready') && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.12.0 · LINK TOOLS NOT READY';
+        badge.textContent = 'v8.14.0 · LINK TOOLS NOT READY';
         badge.className = 'build-badge warn';
         badge.title = linkingState !== 'ready' ? 'Universal Link URL controls did not initialize.' : 'Social / Link Bar did not initialize.';
       }
       if (ready && elementExportState !== 'ready' && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.12.0 · ELEMENT EXPORT NOT READY';
+        badge.textContent = 'v8.14.0 · ELEMENT EXPORT NOT READY';
         badge.className = 'build-badge warn';
         badge.title = 'Element / Group export did not initialize.';
       }
+      if (ready && diagramsState !== 'ready' && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.14.0 · DIAGRAMS NOT READY';
+        badge.className = 'build-badge warn';
+        badge.title = 'The IA / User Flow / Journey Map diagram builder did not initialize.';
+      }
+      if (ready && modesState !== 'ready' && !/ERROR/.test(badge.textContent || '') && !/NOT READY/.test(badge.textContent || '')) {
+        badge.textContent = 'v8.14.0 · MODE SWITCHER NOT READY';
+        badge.className = 'build-badge warn';
+        badge.title = 'The HTML / Diagram mode switcher did not initialize.';
+      }
       if (!ready && !/ERROR/.test(badge.textContent || '')) {
-        badge.textContent = 'v8.12.0 · CORE NOT READY';
+        badge.textContent = 'v8.14.0 · CORE NOT READY';
         badge.className = 'build-badge error';
         badge.title = errors.length ? errors[errors.length - 1].message : 'The v1 core did not pass its startup probe.';
       }

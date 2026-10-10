@@ -190,7 +190,7 @@
       '<style>' + widgetCss() + '</style></head><body>' +
       '<header class="bar"><div><strong>' + escapeHtml(title) + '</strong><span>Skeleton Wireframe → Hi-Fi review</span></div><div class="legend"><b>Wireframe</b><input id="split" type="range" min="0" max="100" value="50" aria-label="Comparison reveal"><b>Hi-Fi</b>' + (includeNotes ? '<label><input id="notesToggle" type="checkbox" checked> Notes</label>' : '') + '</div></header>' +
       '<main class="stage" id="stage"><iframe id="hifi" title="Hi-Fi" sandbox="allow-same-origin allow-forms"></iframe><div class="wire-layer" id="wireLayer"><iframe id="wire" title="Wireframe" sandbox="allow-same-origin allow-forms"></iframe></div><div class="divider" id="divider"></div><div class="notes" id="notes"></div><div class="note-card hidden" id="noteCard"><button id="noteClose">×</button><span id="noteStatus"></span><strong id="noteTitle"></strong><p id="noteBody"></p></div></main>' +
-      '<footer>Exported from UnScriptly™ HTML Studio · Drag the comparison control to move between low-fidelity skeleton structure and final visual design.</footer>' +
+      '<footer>Exported from UnScriptly™ Design Studio · Drag the comparison control to move between low-fidelity skeleton structure and final visual design.</footer>' +
       '<script id="reviewData" type="application/json">' + data + '<\/script><script>' + widgetJs() + '<\/script></body></html>';
   }
   function escapeHtml(value) { return String(value || '').replace(/[&<>"']/g, function (ch) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]; }); }

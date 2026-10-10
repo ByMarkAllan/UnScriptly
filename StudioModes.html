@@ -1,0 +1,128 @@
+<script>
+(function () {
+  'use strict';
+
+  var state = { mode: 'html', lastHtmlView: 'pages' };
+
+  function $(id) { return document.getElementById(id); }
+  function qsa(selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); }
+  function setStatus(value) { document.documentElement.setAttribute('data-design-studio-modes', value); }
+
+  function currentWorkspaceView() {
+    var active = document.querySelector('.library-tab.active[data-library-view]');
+    if (active) return active.getAttribute('data-library-view') || 'pages';
+    var visible = qsa('[data-library-panel]').filter(function (panel) { return !panel.classList.contains('hidden'); })[0];
+    return visible ? (visible.getAttribute('data-library-panel') || 'pages') : 'pages';
+  }
+
+  function syncButtons() {
+    var html = $('htmlStudioModeBtn');
+    var diagram = $('diagramStudioModeBtn');
+    if (html) {
+      var htmlActive = state.mode === 'html';
+      html.classList.toggle('active', htmlActive);
+      html.setAttribute('aria-pressed', htmlActive ? 'true' : 'false');
+    }
+    if (diagram) {
+      var diagramActive = state.mode === 'diagram';
+      diagram.classList.toggle('active', diagramActive);
+      diagram.setAttribute('aria-pressed', diagramActive ? 'true' : 'false');
+    }
+  }
+
+  function syncPanels() {
+    var root = document.documentElement;
+    root.classList.toggle('studio-mode-html', state.mode === 'html');
+    root.classList.toggle('studio-mode-diagram', state.mode === 'diagram');
+    root.setAttribute('data-design-studio-mode', state.mode);
+
+    var htmlToolbar = $('htmlModeToolbar');
+    var diagramToolbar = $('diagramModeToolbar');
+    if (htmlToolbar) htmlToolbar.classList.toggle('hidden', state.mode !== 'html');
+    if (diagramToolbar) diagramToolbar.classList.toggle('hidden', state.mode !== 'diagram');
+
+    var notes = $('notesLauncherBtn');
+    var addPage = $('addPageBtn');
+    if (notes) notes.classList.toggle('hidden', state.mode === 'diagram');
+    if (addPage) addPage.classList.toggle('hidden', state.mode === 'diagram' || state.lastHtmlView !== 'pages');
+
+    var tabs = document.querySelector('.library-tabs');
+    if (tabs) tabs.classList.toggle('hidden', state.mode === 'diagram');
+
+    var projectStrip = $('projectStrip');
+    if (projectStrip) projectStrip.classList.toggle('diagram-mode-compact-project', state.mode === 'diagram');
+
+    var title = $('libraryPanelTitle');
+    if (title && state.mode === 'diagram') title.textContent = 'Maps';
+    var eyebrow = document.querySelector('#leftPanel .panel-heading .eyebrow');
+    if (eyebrow) eyebrow.textContent = state.mode === 'diagram' ? 'Diagram' : 'Workspace';
+  }
+
+  function setMode(mode, options) {
+    mode = mode === 'diagram' ? 'diagram' : 'html';
+    options = options || {};
+
+    if (mode === 'diagram') {
+      var view = currentWorkspaceView();
+      if (view && view !== 'diagrams') state.lastHtmlView = view;
+      state.mode = 'diagram';
+      syncButtons();
+      syncPanels();
+      if (window.HTMLStudioWorkspace && typeof HTMLStudioWorkspace.show === 'function') {
+        HTMLStudioWorkspace.show('diagrams');
+      }
+      document.dispatchEvent(new CustomEvent('designstudio:mode', { detail: { mode: 'diagram' } }));
+      return;
+    }
+
+    state.mode = 'html';
+    if (options.view && options.view !== 'diagrams') state.lastHtmlView = options.view;
+    syncButtons();
+    syncPanels();
+    if (window.HTMLStudioWorkspace && typeof HTMLStudioWorkspace.show === 'function') {
+      HTMLStudioWorkspace.show(state.lastHtmlView || 'pages');
+    }
+    document.dispatchEvent(new CustomEvent('designstudio:mode', { detail: { mode: 'html', view: state.lastHtmlView } }));
+  }
+
+  function bind() {
+    var html = $('htmlStudioModeBtn');
+    var diagram = $('diagramStudioModeBtn');
+    if (html) html.addEventListener('click', function () { setMode('html'); });
+    if (diagram) diagram.addEventListener('click', function () { setMode('diagram'); });
+
+    document.addEventListener('htmlstudio:workspace-view', function (event) {
+      var view = event.detail && event.detail.view;
+      if (!view) return;
+      if (view === 'diagrams') {
+        if (state.mode !== 'diagram') {
+          state.mode = 'diagram';
+          syncButtons();
+          syncPanels();
+        }
+      } else {
+        state.lastHtmlView = view;
+        if (state.mode === 'html') syncPanels();
+      }
+    });
+
+    /* Start in HTML mode even when a saved project contains diagrams. */
+    syncButtons();
+    syncPanels();
+    setStatus('ready');
+  }
+
+  window.HTMLStudioModes = {
+    set: setMode,
+    get: function () { return state.mode; },
+    isHtml: function () { return state.mode === 'html'; },
+    isDiagram: function () { return state.mode === 'diagram'; }
+  };
+
+  try { bind(); }
+  catch (error) {
+    console.error('[Design Studio] Mode switcher failed:', error);
+    setStatus('error');
+  }
+})();
+</script>

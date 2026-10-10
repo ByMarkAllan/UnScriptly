@@ -21,10 +21,13 @@
       panel.classList.toggle('hidden', panel.getAttribute('data-library-panel') !== view);
     });
     var title = $('libraryPanelTitle');
-    if (title) title.textContent = view === 'layers' ? 'Layers' : view === 'elements' ? 'Elements' : view === 'media' ? 'Media' : view === 'notes' ? 'Notes' : 'Pages';
+    if (title) title.textContent = view === 'layers' ? 'Layers' : view === 'elements' ? 'Elements' : view === 'media' ? 'Media' : view === 'diagrams' ? 'Maps' : view === 'notes' ? 'Notes' : 'Pages';
     var add = $('addPageBtn');
     if (add) add.classList.toggle('hidden', view !== 'pages');
+    document.dispatchEvent(new CustomEvent('htmlstudio:workspace-view', { detail: { view: view } }));
   }
+  window.HTMLStudioWorkspace = { show: show };
+
   try {
     qsa('.library-tab').forEach(function (tab) { tab.addEventListener('click', function () { show(tab.getAttribute('data-library-view')); }); });
     var notesLauncher = document.getElementById('notesLauncherBtn');

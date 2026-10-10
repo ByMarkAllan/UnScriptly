@@ -1,12 +1,12 @@
 /**
- * UnScriptly HTML Studio
- * Build: 8.12.0-github-drive-media-preview-20260830
+ * UnScriptly Design Studio
+ * Build: 8.14.0-design-studio-modes-live-mermaid-20261007
  *
  * Architecture:
  * - StudioCore.html is the known-good v1 client engine, unchanged.
  * - All newer features load after the core as isolated extensions.
  */
-var HTML_STUDIO_BUILD = '8.12.0-github-drive-media-preview-20260830';
+var HTML_STUDIO_BUILD = '8.14.0-design-studio-modes-live-mermaid-20261007';
 
 function doGet(e) {
   var template = HtmlService.createTemplateFromFile('StudioApp');
@@ -26,7 +26,7 @@ function doGet(e) {
 
   return template
     .evaluate()
-    .setTitle('UnScriptly HTML Studio')
+    .setTitle('UnScriptly Design Studio')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
 }
 
@@ -48,7 +48,7 @@ function htmlStudioGetBuildInfo() {
     build: HTML_STUDIO_BUILD,
     shell: 'StudioApp.html',
     core: 'immutable-v1-client',
-    features: ['drive-projects', 'drive-image-assets', 'drive-global-media-library', 'drive-media-folders', 'drive-media-url-import', 'drive-media-persistence', 'drive-private-image-preview', 'github-connection', 'github-html-import', 'github-html-commit', 'github-media-upload', 'github-media-url-return', 'layers-drag-drop', 'layers-canvas-sync', 'wireframe-view', 'editor-notes', 'wireframe-export', 'before-after-widget', 'panel-controls', 'fullscreen-preview', 'preview-device-switching', 'wireframe-safe-fallback', 'global-styles', 'png-export', 'navigation-mapping', 'photo-gallery', 'slideshow', 'components-library', 'drive-custom-components', 'universal-link-toggle', 'social-link-bar', 'element-export', 'element-multi-export', 'transparent-png-element-export', 'jpeg-element-export', 'svg-element-export', 'layer-readable-labels', 'element-export-download-fallback', 'png-same-realm-renderer', 'png-same-realm-capture'],
+    features: ['drive-projects', 'drive-image-assets', 'drive-global-media-library', 'drive-media-folders', 'drive-media-url-import', 'drive-media-persistence', 'drive-private-image-preview', 'github-connection', 'github-html-import', 'github-html-commit', 'github-media-upload', 'github-media-url-return', 'layers-drag-drop', 'layers-canvas-sync', 'wireframe-view', 'editor-notes', 'wireframe-export', 'before-after-widget', 'panel-controls', 'fullscreen-preview', 'preview-device-switching', 'wireframe-safe-fallback', 'global-styles', 'png-export', 'navigation-mapping', 'photo-gallery', 'slideshow', 'components-library', 'drive-custom-components', 'universal-link-toggle', 'social-link-bar', 'element-export', 'element-multi-export', 'transparent-png-element-export', 'jpeg-element-export', 'svg-element-export', 'layer-readable-labels', 'element-export-download-fallback', 'png-same-realm-renderer', 'png-same-realm-capture', 'no-code-diagrams', 'ia-builder', 'user-flow-builder', 'journey-map-builder', 'mermaid-flowchart-td', 'diagram-page-assignment', 'diagram-project-persistence', 'design-studio-mode-switcher', 'html-diagram-mode-isolation', 'live-mermaid-editing', 'mermaid-to-diagram-import', 'expanded-diagram-canvas', 'diagram-zoom-controls'],
     runtime: 'Google Apps Script HtmlService'
   };
 }
@@ -67,7 +67,7 @@ function exportPagesZip(pages) {
   });
 
   var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Etc/UTC', 'yyyyMMdd-HHmmss');
-  var zipName = 'html-studio-export-' + stamp + '.zip';
+  var zipName = 'design-studio-export-' + stamp + '.zip';
   var zipBlob = Utilities.zip(blobs, zipName);
   return {
     name: zipName,
@@ -175,7 +175,7 @@ function exportPngZip(images) {
   });
 
   var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Etc/UTC', 'yyyyMMdd-HHmmss');
-  var zipName = 'html-studio-png-' + stamp + '.zip';
+  var zipName = 'design-studio-png-' + stamp + '.zip';
   var zipBlob = Utilities.zip(blobs, zipName);
   return {
     name: zipName,
@@ -247,6 +247,7 @@ function htmlStudioListProjects() {
       pageCount: Array.isArray(manifest.pages) ? manifest.pages.length : 0,
       imageAssetCount: manifest.assets && Array.isArray(manifest.assets.images) ? manifest.assets.images.length : 0,
       noteCount: htmlStudioReviewNoteCount_(manifest.review),
+      diagramCount: htmlStudioDiagramCount_(manifest.diagrams),
       activePage: manifest.activePage || '',
       driveUrl: folder.getUrl()
     });
@@ -271,7 +272,9 @@ function htmlStudioGetProject(projectId) {
     }) : [],
     imageAssetCount: manifest.assets && Array.isArray(manifest.assets.images) ? manifest.assets.images.length : 0,
     noteCount: htmlStudioReviewNoteCount_(manifest.review),
+    diagramCount: htmlStudioDiagramCount_(manifest.diagrams),
     review: htmlStudioNormalizeReview_(manifest.review),
+    diagrams: htmlStudioNormalizeDiagrams_(manifest.diagrams),
     driveUrl: folder.getUrl()
   };
 }
@@ -306,7 +309,7 @@ function htmlStudioBeginProjectSave(request) {
 
     var now = new Date().toISOString();
     var manifest = existingManifest || {
-      schemaVersion: 3,
+      schemaVersion: 4,
       createdAt: now,
       pages: []
     };
@@ -363,7 +366,7 @@ function htmlStudioFinalizeProjectSave(projectId, request) {
 
     var now = new Date().toISOString();
     var manifest = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       name: htmlStudioSanitizeProjectName_(request.name || oldManifest.name || folder.getName()),
       createdAt: oldManifest.createdAt || now,
       updatedAt: now,
@@ -373,6 +376,7 @@ function htmlStudioFinalizeProjectSave(projectId, request) {
       assets: oldManifest.assets || { images: [] },
       imageArchive: request.imageArchive || oldManifest.imageArchive || null,
       review: htmlStudioNormalizeReviewForPages_(request.review || oldManifest.review, keep),
+      diagrams: htmlStudioNormalizeDiagramsForPages_(request.diagrams || oldManifest.diagrams, keep),
       saveState: 'saved'
     };
     folder.setName(manifest.name);
@@ -385,12 +389,101 @@ function htmlStudioFinalizeProjectSave(projectId, request) {
       pageCount: normalized.length,
       imageAssetCount: manifest.assets && Array.isArray(manifest.assets.images) ? manifest.assets.images.length : 0,
       noteCount: htmlStudioReviewNoteCount_(manifest.review),
+      diagramCount: htmlStudioDiagramCount_(manifest.diagrams),
       activePage: manifest.activePage,
       driveUrl: folder.getUrl()
     };
   } finally {
     lock.releaseLock();
   }
+}
+
+function htmlStudioNormalizeDiagrams_(input) {
+  var source = input && Array.isArray(input.diagrams) ? input : { diagrams: [] };
+  var allowedTypes = { 'ia': true, 'user-flow': true, 'journey-map': true, 'sitemap': true, 'service-blueprint': true, 'blank': true };
+  var allowedNodeTypes = { screen:true, section:true, action:true, decision:true, terminal:true, stage:true, touchpoint:true, pain:true, opportunity:true, note:true };
+  var allowedShapes = { rounded:true, rectangle:true, pill:true, diamond:true, circle:true };
+  var result = { schemaVersion: 1, activeDiagramId: String(source.activeDiagramId || '').slice(0, 120), diagrams: [] };
+
+  (source.diagrams || []).slice(0, 40).forEach(function(diagram, diagramIndex) {
+    if (!diagram) return;
+    var nodeIds = {};
+    var normalized = {
+      id: String(diagram.id || ('diagram-' + (diagramIndex + 1))).slice(0, 120),
+      name: String(diagram.name || ('Diagram ' + (diagramIndex + 1))).slice(0, 180),
+      type: allowedTypes[diagram.type] ? diagram.type : 'blank',
+      createdAt: String(diagram.createdAt || '').slice(0, 60),
+      updatedAt: String(diagram.updatedAt || '').slice(0, 60),
+      settings: {
+        snap: !(diagram.settings && diagram.settings.snap === false),
+        canvasWidth: Math.max(1000, Math.min(5000, Number(diagram.settings && diagram.settings.canvasWidth || 1600))),
+        canvasHeight: Math.max(700, Math.min(5000, Number(diagram.settings && diagram.settings.canvasHeight || 1000)))
+      },
+      nodes: [],
+      edges: []
+    };
+
+    (Array.isArray(diagram.nodes) ? diagram.nodes : []).slice(0, 500).forEach(function(node, nodeIndex) {
+      if (!node) return;
+      var id = String(node.id || ('node-' + (nodeIndex + 1))).slice(0, 120);
+      if (nodeIds[id]) id += '-' + (nodeIndex + 1);
+      nodeIds[id] = true;
+      var style = node.style || {};
+      normalized.nodes.push({
+        id: id,
+        type: allowedNodeTypes[node.type] ? node.type : 'screen',
+        title: String(node.title || 'Node').slice(0, 220),
+        subtitle: String(node.subtitle || '').slice(0, 1200),
+        x: Math.max(0, Math.min(5000, Number(node.x || 0))),
+        y: Math.max(0, Math.min(5000, Number(node.y || 0))),
+        page: String(node.page || '').slice(0, 220),
+        style: {
+          shape: allowedShapes[style.shape] ? style.shape : 'rounded',
+          fill: /^#[0-9a-f]{6}$/i.test(String(style.fill || '')) ? String(style.fill) : '#ffffff',
+          text: /^#[0-9a-f]{6}$/i.test(String(style.text || '')) ? String(style.text) : '#111111',
+          border: /^#[0-9a-f]{6}$/i.test(String(style.border || '')) ? String(style.border) : '#111111',
+          width: Math.max(100, Math.min(420, Number(style.width || 180))),
+          radius: Math.max(0, Math.min(999, Number(style.radius || 12))),
+          fontSize: Math.max(9, Math.min(30, Number(style.fontSize || 14))),
+          bold: style.bold !== false
+        }
+      });
+    });
+
+    (Array.isArray(diagram.edges) ? diagram.edges : []).slice(0, 1000).forEach(function(edge, edgeIndex) {
+      if (!edge || !nodeIds[edge.from] || !nodeIds[edge.to]) return;
+      normalized.edges.push({
+        id: String(edge.id || ('edge-' + (edgeIndex + 1))).slice(0, 120),
+        from: String(edge.from).slice(0, 120),
+        to: String(edge.to).slice(0, 120),
+        label: String(edge.label || '').slice(0, 300),
+        style: edge.style === 'dashed' ? 'dashed' : 'solid',
+        color: /^#[0-9a-f]{6}$/i.test(String(edge.color || '')) ? String(edge.color) : '#777777',
+        arrow: edge.arrow !== false
+      });
+    });
+    result.diagrams.push(normalized);
+  });
+
+  if (!result.diagrams.some(function(diagram) { return diagram.id === result.activeDiagramId; })) {
+    result.activeDiagramId = result.diagrams.length ? result.diagrams[0].id : '';
+  }
+  return result;
+}
+
+function htmlStudioNormalizeDiagramsForPages_(input, keep) {
+  var normalized = htmlStudioNormalizeDiagrams_(input);
+  keep = keep || {};
+  normalized.diagrams.forEach(function(diagram) {
+    diagram.nodes.forEach(function(node) {
+      if (node.page && !keep[String(node.page).toLowerCase()]) node.page = '';
+    });
+  });
+  return normalized;
+}
+
+function htmlStudioDiagramCount_(input) {
+  return htmlStudioNormalizeDiagrams_(input).diagrams.length;
 }
 
 function htmlStudioNormalizeReview_(review) {
@@ -504,7 +597,7 @@ function htmlStudioArchiveProjectImage(projectId, request) {
       followRedirects: true,
       muteHttpExceptions: true,
       validateHttpsCertificates: true,
-      headers: { 'User-Agent': 'UnScriptly-HTML-Studio/8.12.0' }
+      headers: { 'User-Agent': 'UnScriptly-Design-Studio/8.14.0' }
     });
     var status = Number(response.getResponseCode() || 0);
     if (status < 200 || status >= 300) throw new Error('Image request returned HTTP ' + status + '.');
@@ -524,7 +617,7 @@ function htmlStudioArchiveProjectImage(projectId, request) {
     blob.setName(filename);
     blob.setContentType(contentType);
     var file = imagesFolder.createFile(blob);
-    file.setDescription('Archived by UnScriptly HTML Studio from ' + sourceUrl);
+    file.setDescription('Archived by UnScriptly Design Studio from ' + sourceUrl);
 
     var record = {
       sourceUrl: sourceUrl,
@@ -908,7 +1001,7 @@ function htmlStudioGetPngRendererSource() {
     followRedirects: true,
     muteHttpExceptions: true,
     validateHttpsCertificates: true,
-    headers: { 'User-Agent': 'UnScriptly-HTML-Studio/8.12.0' }
+    headers: { 'User-Agent': 'UnScriptly-Design-Studio/8.14.0' }
   });
 
   var status = Number(response.getResponseCode() || 0);

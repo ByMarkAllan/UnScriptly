@@ -1,5 +1,5 @@
 /**
- * UnScriptly HTML Studio — Google Drive Media Library Server
+ * UnScriptly Design Studio — Google Drive Media Library Server
  * Hotfix for v8.11.0
  *
  * Create a new Apps Script file named exactly: StudioMediaServer
@@ -94,7 +94,7 @@ function htmlStudioSaveMediaFile(request) {
   var filename = htmlStudioMediaServerSanitizeFilename_(request.name, kind, mimeType);
   var blob = Utilities.newBlob(bytes, mimeType, filename);
   var file = folder.createFile(blob);
-  file.setDescription('UnScriptly HTML Studio Media Library');
+  file.setDescription('UnScriptly Design Studio Media Library');
 
   return htmlStudioMediaServerFileDto_(file, folder, kind);
 }
@@ -116,7 +116,7 @@ function htmlStudioSaveMediaUrl(request) {
       followRedirects: true,
       muteHttpExceptions: true,
       validateHttpsCertificates: true,
-      headers: { 'User-Agent': 'UnScriptly-HTML-Studio/8.12.0 Media Library' }
+      headers: { 'User-Agent': 'UnScriptly-Design-Studio/8.14.0 Media Library' }
     });
   } catch (error) {
     throw new Error('The hosted media URL could not be downloaded: ' + String(error && error.message || error));
@@ -143,7 +143,7 @@ function htmlStudioSaveMediaUrl(request) {
   blob.setContentType(mimeType);
 
   var file = folder.createFile(blob);
-  file.setDescription('UnScriptly HTML Studio Media Library · imported from ' + rawUrl.slice(0, 500));
+  file.setDescription('UnScriptly Design Studio Media Library · imported from ' + rawUrl.slice(0, 500));
 
   return htmlStudioMediaServerFileDto_(file, folder, kind);
 }
@@ -210,7 +210,7 @@ function htmlStudioMediaServerHealth() {
   return {
     ok: true,
     module: 'StudioMediaServer',
-    version: '8.12.0-github-drive-media-preview-20260830',
+    version: '8.14.0-design-studio-modes-live-mermaid-20261007',
     rootFolderId: root.getId(),
     rootFolderName: root.getName()
   };

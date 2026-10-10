@@ -1,6 +1,6 @@
 /**
- * UnScriptly HTML Studio — GitHub Integration Server
- * Build: 8.12.0-github-drive-media-preview-20260830
+ * UnScriptly Design Studio — GitHub Integration Server
+ * Build: 8.14.0-design-studio-modes-live-mermaid-20261007
  *
  * Authentication model:
  * - User provides a GitHub personal access token from Settings.
@@ -160,7 +160,7 @@ function htmlStudioGitHubImportHtml(request) {
       headers: {
         'Authorization': 'Bearer ' + cfg.token,
         'Accept': 'application/vnd.github.raw',
-        'User-Agent': 'UnScriptly-HTML-Studio/8.12.0'
+        'User-Agent': 'UnScriptly-Design-Studio/8.14.0'
       }
     });
     if (raw.getResponseCode() < 200 || raw.getResponseCode() >= 300) throw new Error('GitHub raw file returned HTTP ' + raw.getResponseCode() + '.');
@@ -258,7 +258,7 @@ function htmlStudioGitHubHealth() {
   return {
     ok: true,
     module: 'StudioGitHubServer',
-    version: '8.12.0-github-drive-media-preview-20260830',
+    version: '8.14.0-design-studio-modes-live-mermaid-20261007',
     connected: Boolean(status.connected),
     repository: String(status.repository || ''),
     branch: String(status.branch || '')
@@ -377,7 +377,7 @@ function htmlStudioGitHubRequest_(method, endpoint, payload, token, muteFailure)
       'Accept': 'application/vnd.github+json',
       'Authorization': 'Bearer ' + String(token || ''),
       'X-GitHub-Api-Version': HTML_STUDIO_GITHUB_API_VERSION,
-      'User-Agent': 'UnScriptly-HTML-Studio/8.12.0'
+      'User-Agent': 'UnScriptly-Design-Studio/8.14.0'
     }
   };
   if (payload != null) options.payload = JSON.stringify(payload);

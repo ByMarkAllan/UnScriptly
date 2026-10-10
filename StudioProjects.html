@@ -297,6 +297,8 @@
       current.imageAssetCount = Number(meta.imageAssetCount || 0);
       renderCurrentProject();
       if (window.HTMLStudioReview && HTMLStudioReview.importProjectReview) HTMLStudioReview.importProjectReview(meta.review || { notes: {} });
+      if (window.HTMLStudioDiagrams && HTMLStudioDiagrams.importProjectDiagrams) HTMLStudioDiagrams.importProjectDiagrams(meta.diagrams || { diagrams: [] });
+      else window.__HTML_STUDIO_PENDING_DIAGRAMS = meta.diagrams || { diagrams: [] };
 
       var pages = Array.isArray(meta.pages) ? meta.pages : [];
       for (var i = 0; i < pages.length; i++) {
@@ -350,7 +352,8 @@
         activePage: snapshot.activePage,
         pages: pageMeta,
         imageArchive: archiveSummary,
-        review: window.HTMLStudioReview && HTMLStudioReview.exportProjectReview ? HTMLStudioReview.exportProjectReview() : null
+        review: window.HTMLStudioReview && HTMLStudioReview.exportProjectReview ? HTMLStudioReview.exportProjectReview() : null,
+        diagrams: window.HTMLStudioDiagrams && HTMLStudioDiagrams.exportProjectDiagrams ? HTMLStudioDiagrams.exportProjectDiagrams() : (window.__HTML_STUDIO_PENDING_DIAGRAMS || { diagrams: [] })
       }]);
       current.id = result.id;
       current.name = result.name;
@@ -581,6 +584,7 @@
     var fileInput = $('fileInput');
     if (fileInput) fileInput.addEventListener('change', function () { window.setTimeout(markDirty, 0); });
     document.addEventListener('htmlstudio:review-notes-changed', function () { window.setTimeout(markDirty, 0); });
+    document.addEventListener('htmlstudio:diagrams-changed', function () { window.setTimeout(markDirty, 0); });
   }
 
   function bindUi() {
